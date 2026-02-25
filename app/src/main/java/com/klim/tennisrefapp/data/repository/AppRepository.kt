@@ -10,6 +10,7 @@ import com.klim.tennisrefapp.data.local.dao.SlotDao
 import com.klim.tennisrefapp.data.local.dao.TeamDao
 import com.klim.tennisrefapp.data.local.dao.TeamPlayerDao
 import com.klim.tennisrefapp.data.local.dao.TournamentDao
+import com.klim.tennisrefapp.data.local.entity.CourtEntity
 import com.klim.tennisrefapp.data.local.entity.EventLogEntity
 import com.klim.tennisrefapp.data.local.entity.EventType
 import com.klim.tennisrefapp.data.local.entity.MatchEntity
@@ -18,6 +19,7 @@ import com.klim.tennisrefapp.data.local.entity.PlayerEntity
 import com.klim.tennisrefapp.data.local.entity.SlotEntity
 import com.klim.tennisrefapp.data.local.entity.SlotPosition
 import com.klim.tennisrefapp.data.local.entity.SlotType
+import com.klim.tennisrefapp.data.local.entity.TeamEntity
 import com.klim.tennisrefapp.data.local.entity.TeamPlayerCrossRefEntity
 import com.klim.tennisrefapp.data.local.entity.TournamentEntity
 import com.klim.tennisrefapp.domain.model.CourtCard
@@ -358,7 +360,19 @@ class AppRepository @Inject constructor(
             teamPlayerDao.observeAll(),
             playerDao.observeAll(),
             tournamentDao.observeFirst(),
-        ) { courts, matches, slots, teamPlayers, players, tournament ->
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[0] as List<CourtEntity>
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val players = values[4] as List<PlayerEntity>
+            val tournament = values[5] as TournamentEntity?
+
             val context = BuildContext(
                 matches = matches,
                 slotsByMatch = slots.groupBy { it.matchId },
@@ -399,7 +413,18 @@ class AppRepository @Inject constructor(
             teamPlayerDao.observeAll(),
             playerDao.observeAll(),
             tournamentDao.observeFirst(),
-        ) { court, matches, slots, teamPlayers, players, tournament ->
+        ) { values ->
+            val court = values[0] as CourtEntity?
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val players = values[4] as List<PlayerEntity>
+            val tournament = values[5] as TournamentEntity?
+
             val currentCourt = court ?: return@combine null
             val context = BuildContext(
                 matches = matches,
