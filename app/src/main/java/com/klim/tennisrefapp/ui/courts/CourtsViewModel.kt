@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.klim.tennisrefapp.domain.model.CourtCard
 import com.klim.tennisrefapp.domain.repository.CourtRepository
+import com.klim.tennisrefapp.domain.repository.MatchRepository
 import com.klim.tennisrefapp.domain.repository.TournamentRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -20,6 +21,7 @@ data class CourtsUiState(
 @HiltViewModel
 class CourtsViewModel @Inject constructor(
     private val tournamentRepository: TournamentRepository,
+    private val matchRepository: MatchRepository,
     courtRepository: CourtRepository,
 ) : ViewModel() {
 
@@ -34,6 +36,27 @@ class CourtsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             tournamentRepository.seedIfEmpty()
+        }
+    }
+
+    fun onAssignMatch(courtId: Long) {
+        viewModelScope.launch {
+            matchRepository.assignFirstUnassignedMatch(courtId)
+        }
+    }
+
+    fun onClearCourt(courtId: Long) {
+        viewModelScope.launch {
+            matchRepository.clearCourt(courtId)
+        }
+    }
+
+    fun onSwapWithNext(courtId: Long, orderedCourtIds: List<Long>) {
+        val idx = orderedCourtIds.indexOf(courtId)
+        if (idx == -1 || idx == orderedCourtIds.lastIndex) return
+        val nextId = orderedCourtIds[idx + 1]
+        viewModelScope.launch {
+            matchRepository.swapCourtMatches(courtId, nextId)
         }
     }
 }
