@@ -1,0 +1,23 @@
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# OS junk
+.DS_Store
+Thumbs.db
+*.log
+
+# Local-only agent tooling and private specs
+/tools/
+/.mcp_home/
+/.artifacts/
+AGENTS.md
+SPEC.md
