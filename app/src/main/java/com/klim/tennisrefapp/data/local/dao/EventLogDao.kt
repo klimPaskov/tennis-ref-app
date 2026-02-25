@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.klim.tennisrefapp.data.local.entity.EventLogEntity
+import com.klim.tennisrefapp.data.local.entity.EventType
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -17,4 +18,13 @@ interface EventLogDao {
 
     @Query("SELECT * FROM event_logs WHERE matchId = :matchId ORDER BY timestamp ASC")
     fun observeByMatchId(matchId: Long): Flow<List<EventLogEntity>>
+
+    @Query("SELECT * FROM event_logs WHERE matchId = :matchId AND eventType = :eventType ORDER BY timestamp ASC")
+    suspend fun getByMatchAndType(matchId: Long, eventType: EventType): List<EventLogEntity>
+
+    @Query("SELECT * FROM event_logs WHERE matchId = :matchId AND eventType = :eventType ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestByMatchAndType(matchId: Long, eventType: EventType): EventLogEntity?
+
+    @Query("DELETE FROM event_logs WHERE id = :eventId")
+    suspend fun deleteById(eventId: Long)
 }

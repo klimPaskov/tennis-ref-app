@@ -17,4 +17,7 @@ interface CourtDao {
 
     @Query("SELECT * FROM courts WHERE id = :courtId LIMIT 1")
     fun observeById(courtId: Long): Flow<CourtEntity?>
+
+    @Query("SELECT * FROM courts")
+    suspend fun getAll(): List<CourtEntity>
 }

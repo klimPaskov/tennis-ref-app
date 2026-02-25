@@ -37,4 +37,6 @@ data class MatchEntity(
     val initialLeftTeamId: Long?,
     val initialRightTeamId: Long?,
     val initialServerPlayerId: Long?,
+    val resultType: MatchResultTypeEntity?,
+    val scoreText: String?,
 )

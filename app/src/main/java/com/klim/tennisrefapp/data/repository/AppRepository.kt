@@ -14,6 +14,7 @@ import com.klim.tennisrefapp.data.local.entity.CourtEntity
 import com.klim.tennisrefapp.data.local.entity.EventLogEntity
 import com.klim.tennisrefapp.data.local.entity.EventType
 import com.klim.tennisrefapp.data.local.entity.MatchEntity
+import com.klim.tennisrefapp.data.local.entity.MatchResultTypeEntity
 import com.klim.tennisrefapp.data.local.entity.MatchStatus
 import com.klim.tennisrefapp.data.local.entity.PlayerEntity
 import com.klim.tennisrefapp.data.local.entity.SlotEntity
@@ -40,12 +41,20 @@ import com.klim.tennisrefapp.domain.model.SlotTypeRef
 import com.klim.tennisrefapp.domain.model.TeamSummary
 import com.klim.tennisrefapp.domain.repository.CourtRepository
 import com.klim.tennisrefapp.domain.repository.EventLogRepository
+import com.klim.tennisrefapp.domain.repository.MatchResultType
 import com.klim.tennisrefapp.domain.repository.MatchRepository
+import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
 import com.klim.tennisrefapp.domain.repository.SlotRepository
+import com.klim.tennisrefapp.domain.repository.ApplyViolationResult
+import com.klim.tennisrefapp.domain.repository.EndMatchResult
 import com.klim.tennisrefapp.domain.repository.StartMatchResult
 import com.klim.tennisrefapp.domain.repository.TeamRepository
 import com.klim.tennisrefapp.domain.repository.TournamentRepository
+import com.klim.tennisrefapp.domain.repository.ReminderScheduler
+import com.klim.tennisrefapp.domain.model.ViolationCategory
+import com.klim.tennisrefapp.domain.model.ViolationCounts
+import com.klim.tennisrefapp.domain.usecase.ApplyViolationUseCase
 import com.klim.tennisrefapp.domain.usecase.ComputeNotBeforeUseCase
 import com.klim.tennisrefapp.domain.usecase.ResolveSlotUseCase
 import javax.inject.Inject
@@ -67,6 +76,8 @@ class AppRepository @Inject constructor(
     private val eventLogDao: EventLogDao,
     private val resolveSlotUseCase: ResolveSlotUseCase,
     private val computeNotBeforeUseCase: ComputeNotBeforeUseCase,
+    private val applyViolationUseCase: ApplyViolationUseCase,
+    private val reminderScheduler: ReminderScheduler,
 ) : TournamentRepository,
     CourtRepository,
     MatchRepository,
@@ -145,6 +156,8 @@ class AppRepository @Inject constructor(
                         initialLeftTeamId = 1L,
                         initialRightTeamId = 2L,
                         initialServerPlayerId = 1L,
+                        resultType = MatchResultTypeEntity.NORMAL,
+                        scoreText = "6-4 6-3",
                     ),
                     MatchEntity(
                         id = 101L,
@@ -160,6 +173,8 @@ class AppRepository @Inject constructor(
                         initialLeftTeamId = null,
                         initialRightTeamId = null,
                         initialServerPlayerId = null,
+                        resultType = null,
+                        scoreText = null,
                     ),
                     MatchEntity(
                         id = 102L,
@@ -175,6 +190,8 @@ class AppRepository @Inject constructor(
                         initialLeftTeamId = 4L,
                         initialRightTeamId = 3L,
                         initialServerPlayerId = 4L,
+                        resultType = null,
+                        scoreText = null,
                     ),
                     MatchEntity(
                         id = 103L,
@@ -190,6 +207,8 @@ class AppRepository @Inject constructor(
                         initialLeftTeamId = null,
                         initialRightTeamId = null,
                         initialServerPlayerId = null,
+                        resultType = null,
+                        scoreText = null,
                     ),
                 ),
             )
@@ -308,6 +327,8 @@ class AppRepository @Inject constructor(
                 ),
             )
         }
+
+        recomputeNotBeforeAndSchedule()
     }
 
     override fun observePlayers(): Flow<List<PlayerSummary>> {
@@ -391,6 +412,7 @@ class AppRepository @Inject constructor(
                         status = CourtStatus.EMPTY,
                         currentMatchLabel = "No match",
                         computedNotBeforeMillis = null,
+                        matchId = null,
                     )
                 } else {
                     CourtCard(
@@ -399,6 +421,7 @@ class AppRepository @Inject constructor(
                         status = currentMatch.status.toCourtStatus(),
                         currentMatchLabel = formatMatchLabel(currentMatch, context),
                         computedNotBeforeMillis = computeNotBefore(currentMatch, context),
+                        matchId = currentMatch.id,
                     )
                 }
             }
@@ -449,6 +472,8 @@ class AppRepository @Inject constructor(
                     initialServerPlayerId = null,
                     canSwapSides = false,
                     canStartMatch = false,
+                    scoreText = null,
+                    resultType = null,
                 )
             } else {
                 val left = sideForMatch(currentMatch.id, SlotPosition.LEFT, context)
@@ -467,6 +492,8 @@ class AppRepository @Inject constructor(
                     initialServerPlayerId = currentMatch.initialServerPlayerId,
                     canSwapSides = currentMatch.status == MatchStatus.SCHEDULED,
                     canStartMatch = canStart,
+                    scoreText = currentMatch.scoreText,
+                    resultType = currentMatch.resultType?.name,
                 )
             }
         }
@@ -548,6 +575,168 @@ class AppRepository @Inject constructor(
             )
 
             StartMatchResult.Success
+        }
+            .also {
+                if (it == StartMatchResult.Success) {
+                    recomputeNotBeforeAndSchedule()
+                }
+            }
+    }
+
+    override suspend fun endMatch(
+        matchId: Long,
+        winnerSide: MatchWinnerSide,
+        resultType: MatchResultType,
+        scoreText: String,
+        timestamp: Long,
+    ): EndMatchResult {
+        return database.withTransaction {
+            val match = matchDao.getById(matchId) ?: return@withTransaction EndMatchResult.MatchNotFound
+            if (match.status != MatchStatus.IN_PROGRESS) {
+                return@withTransaction EndMatchResult.InvalidMatchState
+            }
+            val leftTeam = match.initialLeftTeamId
+            val rightTeam = match.initialRightTeamId
+            if (leftTeam == null || rightTeam == null) {
+                return@withTransaction EndMatchResult.MissingResolvedParticipants
+            }
+            val winnerTeamId = if (winnerSide == MatchWinnerSide.LEFT) leftTeam else rightTeam
+            matchDao.update(
+                match.copy(
+                    status = MatchStatus.COMPLETED,
+                    endedAt = timestamp,
+                    winnerTeamId = winnerTeamId,
+                    resultType = resultType.toEntityType(),
+                    scoreText = scoreText,
+                ),
+            )
+            eventLogDao.insert(
+                EventLogEntity(
+                    matchId = match.id,
+                    courtId = match.courtId,
+                    timestamp = timestamp,
+                    eventType = EventType.MATCH_ENDED,
+                    offenderPlayerId = null,
+                    message = "RESULT|${resultType.name}|$scoreText|winnerTeamId=$winnerTeamId",
+                ),
+            )
+            EndMatchResult.Success
+        }.also {
+            if (it == EndMatchResult.Success) {
+                recomputeNotBeforeAndSchedule()
+            }
+        }
+    }
+
+    override suspend fun applyViolation(
+        matchId: Long,
+        offenderPlayerId: Long,
+        category: ViolationCategory,
+        violationName: String,
+        timestamp: Long,
+    ): ApplyViolationResult {
+        return database.withTransaction {
+            val match = matchDao.getById(matchId) ?: return@withTransaction ApplyViolationResult(
+                guidance = applyViolationUseCase.apply(ViolationCounts(), category).guidance,
+                summary = "Match not found",
+            )
+            val existing = eventLogDao.getByMatchAndType(matchId, EventType.VIOLATION)
+                .filter { it.offenderPlayerId == offenderPlayerId }
+            val currentCounts = existing.fold(ViolationCounts()) { acc, event ->
+                when (parseViolationCategory(event.message)) {
+                    ViolationCategory.CODE -> acc.copy(codeViolationCount = acc.codeViolationCount + 1)
+                    ViolationCategory.TIME_SERVER -> acc.copy(timeViolationCountServer = acc.timeViolationCountServer + 1)
+                    ViolationCategory.TIME_RECEIVER -> acc.copy(timeViolationCountReceiver = acc.timeViolationCountReceiver + 1)
+                    null -> acc
+                }
+            }
+            val decision = applyViolationUseCase.apply(currentCounts, category)
+            eventLogDao.insert(
+                EventLogEntity(
+                    matchId = matchId,
+                    courtId = match.courtId,
+                    timestamp = timestamp,
+                    eventType = EventType.VIOLATION,
+                    offenderPlayerId = offenderPlayerId,
+                    message = "VIOLATION|${category.name}|$violationName|offence=${decision.guidance.offenceNumber}|applied=${decision.guidance.appliedPenalty}|next=${decision.guidance.nextPenalty}",
+                ),
+            )
+            ApplyViolationResult(
+                guidance = decision.guidance,
+                summary = "Applied: $violationName to player #$offenderPlayerId",
+            )
+        }
+    }
+
+    override suspend fun undoLastViolation(matchId: Long): Boolean {
+        val latest = eventLogDao.getLatestByMatchAndType(matchId, EventType.VIOLATION) ?: return false
+        eventLogDao.deleteById(latest.id)
+        return true
+    }
+
+    override suspend fun clearCourt(courtId: Long) {
+        database.withTransaction {
+            val all = matchDao.getAll()
+            val target = pickCurrentMatch(courtId, all) ?: return@withTransaction
+            if (target.status == MatchStatus.COMPLETED) return@withTransaction
+            matchDao.update(target.copy(courtId = null))
+        }
+    }
+
+    override suspend fun assignFirstUnassignedMatch(courtId: Long): Boolean {
+        return database.withTransaction {
+            val allMatches = matchDao.getAll()
+            val allSlots = slotDao.getAll()
+            val players = playerDao.getAll()
+            val teamPlayers = teamPlayerDao.getAll()
+            val tournament = tournamentDao.getFirst()
+            val context = BuildContext(
+                matches = allMatches,
+                slotsByMatch = allSlots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val candidate = allMatches
+                .asSequence()
+                .filter { it.courtId == null && it.status == MatchStatus.SCHEDULED }
+                .sortedBy { it.id }
+                .firstOrNull { match ->
+                    val left = sideForMatch(match.id, SlotPosition.LEFT, context)
+                    val right = sideForMatch(match.id, SlotPosition.RIGHT, context)
+                    left?.resolvedTeamId != null && right?.resolvedTeamId != null
+                } ?: return@withTransaction false
+            matchDao.update(candidate.copy(courtId = courtId))
+            true
+        }.also {
+            if (it) recomputeNotBeforeAndSchedule()
+        }
+    }
+
+    override suspend fun swapCourtMatches(courtIdA: Long, courtIdB: Long): Boolean {
+        return database.withTransaction {
+            val all = matchDao.getAll()
+            val first = pickCurrentMatch(courtIdA, all)
+            val second = pickCurrentMatch(courtIdB, all)
+            if (first == null && second == null) return@withTransaction false
+
+            first?.let { matchDao.update(it.copy(courtId = courtIdB)) }
+            second?.let { matchDao.update(it.copy(courtId = courtIdA)) }
+            true
+        }.also {
+            if (it) recomputeNotBeforeAndSchedule()
+        }
+    }
+
+    override suspend fun moveMatchToCourt(matchId: Long, courtId: Long?): Boolean {
+        return database.withTransaction {
+            val match = matchDao.getById(matchId) ?: return@withTransaction false
+            matchDao.update(match.copy(courtId = courtId))
+            true
+        }.also {
+            if (it) recomputeNotBeforeAndSchedule()
         }
     }
 
@@ -744,6 +933,58 @@ class AppRepository @Inject constructor(
             EventType.MATCH_ENDED -> MatchEventKind.MATCH_ENDED
             EventType.VIOLATION -> MatchEventKind.VIOLATION
             EventType.TIMER -> MatchEventKind.TIMER
+        }
+    }
+
+    private fun MatchResultType.toEntityType(): MatchResultTypeEntity {
+        return when (this) {
+            MatchResultType.NORMAL -> MatchResultTypeEntity.NORMAL
+            MatchResultType.RETIREMENT -> MatchResultTypeEntity.RETIREMENT
+            MatchResultType.WALKOVER -> MatchResultTypeEntity.WALKOVER
+            MatchResultType.DEFAULT -> MatchResultTypeEntity.DEFAULT
+        }
+    }
+
+    private fun parseViolationCategory(message: String?): ViolationCategory? {
+        if (message == null) return null
+        if (!message.startsWith("VIOLATION|")) return null
+        val categoryLabel = message.split("|").getOrNull(1) ?: return null
+        return runCatching { ViolationCategory.valueOf(categoryLabel) }.getOrNull()
+    }
+
+    private suspend fun recomputeNotBeforeAndSchedule() {
+        database.withTransaction {
+            val matches = matchDao.getAll()
+            val slots = slotDao.getAll()
+            val players = playerDao.getAll()
+            val teamPlayers = teamPlayerDao.getAll()
+            val tournament = tournamentDao.getFirst()
+            val courts = courtDao.getAll().associateBy { it.id }
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+
+            for (match in matches) {
+                val computed = computeNotBefore(match, context)
+                if (computed != match.computedNotBefore) {
+                    matchDao.update(match.copy(computedNotBefore = computed))
+                }
+                if (match.status == MatchStatus.SCHEDULED && computed != null) {
+                    reminderScheduler.scheduleNotBeforeReminder(
+                        matchId = match.id,
+                        triggerAtMillis = computed - 10 * 60_000L,
+                        courtName = match.courtId?.let { courts[it]?.name ?: "Court $it" },
+                    )
+                } else {
+                    reminderScheduler.cancelNotBeforeReminder(match.id)
+                }
+            }
         }
     }
 

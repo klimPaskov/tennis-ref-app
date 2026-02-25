@@ -2,6 +2,7 @@ package com.klim.tennisrefapp.data.local.converter
 
 import androidx.room.TypeConverter
 import com.klim.tennisrefapp.data.local.entity.EventType
+import com.klim.tennisrefapp.data.local.entity.MatchResultTypeEntity
 import com.klim.tennisrefapp.data.local.entity.MatchStatus
 import com.klim.tennisrefapp.data.local.entity.SlotPosition
 import com.klim.tennisrefapp.data.local.entity.SlotType
@@ -30,4 +31,10 @@ class RoomConverters {
 
     @TypeConverter
     fun toEventType(value: String): EventType = EventType.valueOf(value)
+
+    @TypeConverter
+    fun fromMatchResultType(value: MatchResultTypeEntity?): String? = value?.name
+
+    @TypeConverter
+    fun toMatchResultType(value: String?): MatchResultTypeEntity? = value?.let { MatchResultTypeEntity.valueOf(it) }
 }

@@ -26,6 +26,7 @@ data class CourtCard(
     val status: CourtStatus,
     val currentMatchLabel: String,
     val computedNotBeforeMillis: Long?,
+    val matchId: Long?,
 )
 
 data class CourtDetail(
@@ -40,6 +41,8 @@ data class CourtDetail(
     val initialServerPlayerId: Long?,
     val canSwapSides: Boolean,
     val canStartMatch: Boolean,
+    val scoreText: String?,
+    val resultType: String?,
 )
 
 enum class MatchEventKind {

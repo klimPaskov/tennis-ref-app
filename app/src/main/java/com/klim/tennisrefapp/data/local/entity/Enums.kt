@@ -23,3 +23,10 @@ enum class EventType {
     VIOLATION,
     TIMER,
 }
+
+enum class MatchResultTypeEntity {
+    NORMAL,
+    RETIREMENT,
+    WALKOVER,
+    DEFAULT,
+}
