@@ -10,3 +10,4 @@ This folder documents each MVP mechanic implemented in the app.
 - `event-log-storage.md`
 - `fake-seed-data.md`
 - `workmanager-reminder-foundation.md`
+- `timer-violations-score-and-court-actions.md`

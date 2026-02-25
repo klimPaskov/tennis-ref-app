@@ -1,56 +1,46 @@
-# Tennis Referee App (MVP)
+# Tennis Referee App
 
-Android MVP for court referees built with Kotlin, Jetpack Compose, Room, Hilt, and WorkManager.
+Tennis Referee App is an Android app for on-court tournament refereeing.  
+It is designed for fast, low-friction match control: view courts, open a court, confirm first server, and start matches with clear state tracking.
 
-## Implemented in this pass
-- New Android Studio/Gradle Kotlin DSL project in this repository.
-- Room entities/DAOs/repositories for `Tournament`, `Court`, `Player`, `Team`, `Match`, `Slot`, and `EventLog`.
-- Slot modeling supports:
-  - direct team
-  - winner of another match
-  - bye
-- Match start data model includes `startedAt` and `endedAt`.
-- Violations and timer milestones are stored as `EventLog` rows.
-- Pure Kotlin domain rules with unit tests for:
-  - slot resolution
-  - not-before computation
-  - violation ladder guidance
-- Compose UI:
-  - Courts list with status, match label, and computed not-before
-  - Court detail with left/right layout, side swap, initial server selection, and Start Match
-  - In-progress action buttons (`Timer`, `Violations`, `Score`) shown as disabled placeholders
-- Fake seed data so the app is usable immediately.
+## What This App Does
+- Shows all courts with current match and status.
+- Supports unresolved draw slots (`Winner of Match X`, `TBD`, `BYE`).
+- Lets a referee set sides, choose initial server, and start a match.
+- Tracks match timeline data (`startedAt`, `endedAt`) and event history.
+- Computes “not before” time using rest constraints and optional manual limits.
 
-## How to run
-1. Open the repo in Android Studio.
-2. Ensure Android SDK 34 and JDK 17 are installed.
-3. Sync Gradle and run the `app` configuration on an emulator/device.
+## Quick Start
+### Prerequisites
+- Android Studio (latest stable)
+- JDK 17
+- Android SDK 34
 
-CLI equivalents:
+### Run in Android Studio
+1. Open this repository.
+2. Let Gradle sync complete.
+3. Run the `app` configuration on an emulator or device.
+
+### Run from CLI
 ```bash
-./gradlew testDebugUnitTest
 ./gradlew assembleDebug
+./gradlew testDebugUnitTest
 ```
 
-## Database location
-Room database file name: `tennis_ref.db`
+## First Launch
+The app seeds a small sample tournament automatically on first run, so you can explore screens immediately without importing data.
 
-On device/emulator, the database is at:
-`/data/data/com.klim.tennisrefapp/databases/tennis_ref.db`
+## Data Storage
+- Local Room database file: `tennis_ref.db`
+- Device path: `/data/data/com.klim.tennisrefapp/databases/tennis_ref.db`
 
-## Not-before computation (high level)
-For a match, `computedNotBefore` is calculated as:
-- `manualNotBefore` (if present)
-- and each known player's rest-based earliest start:
-  - `lastEndedAt(player) + restMinutes(player)`
+## Core Rule: Not-Before Time
+For each match, the app computes the earliest valid start as the maximum of:
+- `manualNotBefore` (if set), and
+- each known player's `lastEndedAt + restMinutes`.
 
-Final value is the maximum of those constraints.
-For doubles, both players contribute constraints.
-For TBD slots, only currently known participants are used until dependencies resolve.
+For doubles, both players constrain availability. For unresolved slots, only known participants are considered until dependencies resolve.
 
-## Assumptions for ambiguous parts
-- Court card "current match" priority is: `In progress` > `Scheduled` > `Completed`.
-- A match can start only when both sides resolve to concrete teams (BYE does not start a live match in this MVP).
-- Initial server must be one of the visible players and must be selected before `Start Match`.
-- WorkManager integration is included (worker + scheduler), but actual user-facing reminder notifications are deferred to the next pass.
-- Fake seed includes example violation and timer `EventLog` entries for immediate UI/testing context.
+## Project Docs
+- Contributor guide: `AGENTS.md`
+- Mechanics details: `docs/mechanics/`
