@@ -130,7 +130,7 @@ private fun PlayersScreen(
                         }
                         Text("Completed matches: ${player.completedCount}", style = MaterialTheme.typography.bodySmall)
                         if (player.nextMatchLabel != null) {
-                            val nextOn = player.nextNotBeforeMillis?.let { formatDateTime(it) } ?: "TBD"
+                            val nextOn = player.nextNotBeforeMillis?.let { formatTime(it) } ?: "TBD"
                             Text(
                                 text = "Next: ${player.nextCourtName ?: "Unassigned"} · $nextOn",
                                 style = MaterialTheme.typography.bodySmall,
@@ -152,11 +152,6 @@ private fun playersSortLabel(sort: PlayersSort): String {
         PlayersSort.COMPLETED -> "Completed"
         PlayersSort.NEXT_MATCH -> "Next Match"
     }
-}
-
-private fun formatDateTime(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
-    return formatter.format(Date(timestamp))
 }
 
 private fun formatTime(timestamp: Long): String {

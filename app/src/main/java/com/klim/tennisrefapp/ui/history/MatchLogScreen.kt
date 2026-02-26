@@ -102,7 +102,7 @@ private fun MatchLogScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = formatDateTime(event.timestamp),
+                            text = formatTime(event.timestamp),
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -118,8 +118,8 @@ private fun MatchLogScreen(
     }
 }
 
-private fun formatDateTime(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
+private fun formatTime(timestamp: Long): String {
+    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
 }
 

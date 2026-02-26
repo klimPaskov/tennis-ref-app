@@ -157,7 +157,7 @@ private fun PlayerDetailScreen(
                             Text(next.matchLabel)
                             Text("${next.courtName ?: "Unassigned"} · ${next.status.name}")
                             next.notBeforeMillis?.let { notBefore ->
-                                Text("Not before ${formatDateTime(notBefore)}")
+                                Text("Not before ${formatTime(notBefore)}")
                             }
                         }
                     }
@@ -181,7 +181,7 @@ private fun PlayerDetailScreen(
                             Text(duration)
                         }
                         match.endedAtMillis?.let { endedAt ->
-                            Text("Ended ${formatDateTime(endedAt)}")
+                            Text("Ended ${formatTime(endedAt)}")
                         }
                     }
                 }
@@ -200,8 +200,8 @@ private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): St
     return if (hours > 0L) "Duration ${hours}h ${minutes}m" else "Duration ${minutes}m"
 }
 
-private fun formatDateTime(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
+private fun formatTime(timestamp: Long): String {
+    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
 }
 

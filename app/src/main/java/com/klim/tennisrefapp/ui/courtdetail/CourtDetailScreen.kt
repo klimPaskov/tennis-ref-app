@@ -860,24 +860,19 @@ private fun ParticipantSideCard(
                     ) {
                         val flag = countryCodeToFlagEmoji(player.countryCode)
                         val (firstLine, secondLine) = splitNameIntoTwoLines(player.name)
+                        val firstLineWithFlag = if (flag != null) "$flag $firstLine" else firstLine
                         Column(
                             modifier = Modifier.weight(1f),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             AutoSizingNameLine(
-                                text = firstLine,
+                                text = firstLineWithFlag,
                                 isEmphasized = isWinner,
                             )
                             if (!secondLine.isNullOrBlank()) {
                                 AutoSizingNameLine(
                                     text = secondLine,
                                     isEmphasized = isWinner,
-                                )
-                            }
-                            if (flag != null) {
-                                Text(
-                                    text = flag,
-                                    fontSize = 24.sp,
                                 )
                             }
                         }
