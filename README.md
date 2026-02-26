@@ -32,8 +32,10 @@ The app seeds a small sample tournament automatically on first run, so you can e
 
 Seed assumptions for this sample:
 - Player names are taken from `Order of Play.pdf`.
-- The first listed matches are already completed.
-- The next matches are scheduled and have not started yet.
+- Courts `2` to `8` are seeded from the order-of-play day.
+- Match `#1` on each court is marked completed.
+- The following matches are scheduled and not started.
+- Player nationality is stored as an abbreviation (for example, `EST`, `FIN`) and shown in UI with a flag emoji.
 
 ## Data Storage
 - Local Room database file: `tennis_ref.db`
@@ -53,6 +55,17 @@ For doubles, both players constrain availability. For unresolved slots, only kno
   - no score -> Walkover
   - incomplete score (for example `4:3`) -> Retirement
   - complete score -> Normal
+
+## Match Timing
+- Warm-up starts automatically after the initial server is selected.
+- Match can start automatically when warm-up ends, or manually with `Start Match Now`.
+- In-progress timer menu includes referee timing presets:
+  - side switch
+  - set break
+  - toilet break
+  - off-court allowance
+  - medical timeout
+  - equipment fix
 
 ## Project Docs
 - Contributor guide: `AGENTS.md`

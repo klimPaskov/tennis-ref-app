@@ -1,8 +1,16 @@
 # Timer, Violations, Score, and Court Actions
 
 ## Timer
-- In-progress view keeps a compact timer control.
-- The UI no longer defaults to showing a `5:00` warm-up label in match-progress context.
+- Warm-up timer starts automatically once initial server is selected on a scheduled match.
+- Match can auto-start when warm-up reaches 0, or be manually started with `Start Match Now`.
+- In-progress timer control opens referee timing presets:
+  - side switch
+  - set break
+  - toilet break
+  - off-court allowance
+  - medical timeout
+  - equipment fix
+- Timer start/stop/finish actions are logged as `EventLog` rows with `TIMER` type.
 
 ## Violations
 - Violations open from a small icon button.
@@ -18,6 +26,7 @@
   - incomplete score (for example `4:3`) -> `RETIREMENT`
   - complete score -> `NORMAL`
 - Submitting score records `endedAt`, sets winner, marks match completed, and logs `MATCH_ENDED`.
+- Completed match header shows played duration from `startedAt` and `endedAt`.
 
 ## Court assignment actions
 - Court detail supports moving match to another court or unassigned.
