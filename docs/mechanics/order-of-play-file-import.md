@@ -2,6 +2,7 @@
 
 ## Supported Inputs
 - PDF files (`application/pdf`)
+- Image files (`.png`, `.jpg`, `.jpeg`, `.webp`) via on-device OCR
 - Plain text files
 
 ## Import Flow
@@ -14,6 +15,7 @@
 - Detect match pairings from lines around `vs.` tokens.
 - Parse player names and optional nationality code from `Name(COUNTRY)` patterns.
 - Assign parsed pairs across detected courts in order.
+- Imported matches are created as scheduled (no pre-completed results/scores).
 
 ## Failure Behavior
 - If file cannot be parsed, import returns false and UI shows an error.

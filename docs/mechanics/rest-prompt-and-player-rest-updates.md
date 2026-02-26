@@ -7,7 +7,9 @@
 - If both conditions are met, a rest dialog appears with editable minutes per eligible player.
 
 ## Manual Rest Update
-- Player detail includes `Rest Minutes` edit + save.
+- Player detail includes `Rest Minutes` edit + save only when the player is eligible:
+  - has an upcoming match, and
+  - has at least one completed match meeting rest threshold rules.
 - Updating rest recalculates not-before times across the schedule immediately.
 
 ## Why It Matters
