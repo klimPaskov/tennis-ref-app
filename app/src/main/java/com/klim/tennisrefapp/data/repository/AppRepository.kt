@@ -1643,6 +1643,7 @@ class AppRepository @Inject constructor(
         }
 
         if (matches.size < columns.size) return null
+        val harmonizedMatches = harmonizeRowSchedules(matches)
         val flatLines = recognized.text
             .replace('\u000C', '\n')
             .lineSequence()
@@ -1653,7 +1654,7 @@ class AppRepository @Inject constructor(
         return ImportedOrderDocument(
             tournamentName = extractTournamentName(flatLines) ?: "Imported Order Of Play",
             courts = columns.map { it.name },
-            matches = matches,
+            matches = harmonizedMatches,
         )
     }
 
@@ -1886,13 +1887,19 @@ class AppRepository @Inject constructor(
         val primary = if (takeTail) candidates.last() else candidates.first()
         val pair = if (takeTail) candidates.takeLast(2) else candidates.take(2)
         if (pair.size < 2) return primary.text
+        val verticalGap = abs(pair[1].centerY - pair[0].centerY)
+        if (verticalGap > 28f) return primary.text
 
         val mergedRaw = pair.joinToString(" ") { it.text }.normalizeSpaces().trim()
         val merged = parseEntrant(mergedRaw)
         val single = parseEntrant(primary.text)
+        val mergeLikelySplitEntrant =
+            hasCountryMarker(pair[0].text).xor(hasCountryMarker(pair[1].text)) ||
+                (single != null && single.name.split(' ').size == 1)
         return when {
             merged == null -> primary.text
             single == null -> mergedRaw
+            !mergeLikelySplitEntrant -> primary.text
             merged.name.split(' ').size >= single.name.split(' ').size -> mergedRaw
             else -> primary.text
         }
@@ -1939,6 +1946,35 @@ class AppRepository @Inject constructor(
             label
         }
         return ScheduleContext(label = scheduleLabel, manualNotBefore = manualNotBefore)
+    }
+
+    private fun harmonizeRowSchedules(matches: List<ImportedOrderMatch>): List<ImportedOrderMatch> {
+        if (matches.isEmpty()) return matches
+        return matches
+            .groupBy { it.order }
+            .toSortedMap()
+            .values
+            .flatMap { rowMatches ->
+                val rowSchedule = rowMatches
+                    .map { match -> parseScheduleContextFromText(match.scheduleLabel) }
+                    .firstOrNull { context ->
+                        context.manualNotBefore != null ||
+                            context.label.contains("Not Before", ignoreCase = true) ||
+                            context.label.contains("Starting at", ignoreCase = true)
+                    }
+                    ?: return@flatMap rowMatches
+
+                rowMatches.map { match ->
+                    if (match.manualNotBefore == null && match.scheduleLabel.equals("Followed By", ignoreCase = true)) {
+                        match.copy(
+                            scheduleLabel = rowSchedule.label,
+                            manualNotBefore = rowSchedule.manualNotBefore,
+                        )
+                    } else {
+                        match
+                    }
+                }
+            }
     }
 
     private fun parseCourtName(raw: String): String? {
@@ -2002,8 +2038,10 @@ class AppRepository @Inject constructor(
             .lowercase()
             .replace(Regex("[^a-z0-9]"), "")
         return when {
-            compact.contains("notbefore") -> "Not Before"
-            compact.contains("startingat") -> "Starting at"
+            compact.contains("notbefore") ||
+                compact.contains("notbefor") ||
+                compact.contains("notbefo") -> "Not Before"
+            compact.contains("startingat") || compact.contains("starting") -> "Starting at"
             compact.contains("followedby") || compact.contains("followed") -> "Followed By"
             else -> null
         }
@@ -2416,13 +2454,11 @@ class AppRepository @Inject constructor(
         if (cleaned.isBlank()) return null
         val tokens = cleaned
             .split(' ')
-            .map { token ->
-                token.trim().trim(',', ';', ':', '.', '(', ')', '[', ']', '{', '}', '|')
-            }
+            .map(::normalizeNameToken)
             .filter { token ->
                 token.isNotBlank() &&
                     token.any { it.isLetter() } &&
-                    !token.any { it.isDigit() } &&
+                    token.length > 1 &&
                     !tokenMatchesCountry(token, matchedCountry) &&
                     !isLikelySeedArtifactToken(token)
             }
@@ -2440,8 +2476,13 @@ class AppRepository @Inject constructor(
 
     private fun tokenMatchesCountry(token: String, countryCode: String?): Boolean {
         val matched = countryCode ?: return false
-        val normalized = normalizeCountryCodeToken(token) ?: return false
-        return normalized == matched || normalized == ISO3_TO_ISO2[matched]
+        val cleaned = token.trim().replace(Regex("[^A-Za-z]"), "").uppercase()
+        if (cleaned.isBlank()) return false
+        val iso2 = ISO3_TO_ISO2[matched]
+        if (cleaned == matched || cleaned == iso2) return true
+        if (cleaned.length !in 2..4) return false
+        val normalized = normalizeCountryCodeToken(cleaned) ?: return false
+        return normalized == matched || normalized == iso2
     }
 
     private fun isLikelySeedArtifactToken(token: String): Boolean {
@@ -2449,6 +2490,26 @@ class AppRepository @Inject constructor(
         if (token.any { it.isDigit() }) return true
         if (token.contains('[') || token.contains(']') || token.contains('|')) return true
         return token.length <= 2 && token.all { it in "IiLlZzSsrR" }
+    }
+
+    private fun normalizeNameToken(raw: String): String {
+        return raw
+            .trim()
+            .trim(',', ';', ':', '.', '(', ')', '[', ']', '{', '}', '|')
+            .replace('0', 'O')
+            .replace('1', 'I')
+            .replace('2', 'Z')
+            .replace('3', 'E')
+            .replace('4', 'A')
+            .replace('5', 'S')
+            .replace('6', 'G')
+            .replace('7', 'T')
+            .replace('8', 'B')
+            .replace(Regex("[^A-Za-z'\\-]"), "")
+    }
+
+    private fun hasCountryMarker(raw: String): Boolean {
+        return Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)").containsMatchIn(raw)
     }
 
     private fun findScheduleContext(lines: List<String>, aroundIndex: Int): ScheduleContext {
