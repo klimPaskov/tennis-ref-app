@@ -345,12 +345,18 @@ class AppRepository @Inject constructor(
 
             val entrants = imported.matches
                 .flatMap { listOf(it.left, it.right) }
-                .distinctBy { it.name }
+                .fold(linkedMapOf<String, ParsedEntrant>()) { acc, entrant ->
+                    val existing = acc[entrant.name]
+                    acc[entrant.name] = mergeEntrant(existing, entrant)
+                    acc
+                }
+                .values
+                .toList()
             val players = entrants.mapIndexed { index, entrant ->
                 PlayerEntity(
                     id = (index + 1).toLong(),
                     tournamentId = 1L,
-                    displayName = entrant.name,
+                    displayName = buildEntrantDisplayName(entrant.name, entrant.seed),
                     countryCode = entrant.countryCode,
                     restMinutes = DEFAULT_REST_MINUTES,
                 )
@@ -375,7 +381,9 @@ class AppRepository @Inject constructor(
                 },
             )
 
-            val playerIdByName = players.associate { it.displayName to it.id }
+            val playerIdByName = entrants
+                .mapIndexed { index, entrant -> entrant.name to (index + 1L) }
+                .toMap()
             val matchEntities = mutableListOf<MatchEntity>()
             val slotEntities = mutableListOf<SlotEntity>()
             var matchId = 100L
@@ -1866,6 +1874,18 @@ class AppRepository @Inject constructor(
         return token.toIntOrNull()?.takeIf { it in 1..64 }
     }
 
+    private fun mergeEntrant(existing: ParsedEntrant?, incoming: ParsedEntrant): ParsedEntrant {
+        if (existing == null) return incoming
+        return existing.copy(
+            countryCode = existing.countryCode ?: incoming.countryCode,
+            seed = existing.seed ?: incoming.seed,
+        )
+    }
+
+    private fun buildEntrantDisplayName(name: String, seed: Int?): String {
+        return if (seed != null) "$name [$seed]" else name
+    }
+
     private fun scheduleKeywordLabel(value: String): String? {
         val compact = value
             .lowercase()
@@ -1921,10 +1941,68 @@ class AppRepository @Inject constructor(
         return candidates.firstNotNullOfOrNull { normalizeCountryCodeToken(it) }
     }
 
+    private fun detectSeed(raw: String, countryCode: String?): Int? {
+        Regex("\\[(\\d{1,2})\\]").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { value ->
+            if (value in 1..32) return value
+        }
+        Regex("\\((\\d{1,2})\\)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { value ->
+            if (value in 1..32) return value
+        }
+
+        val tokens = Regex("[A-Za-z0-9|\\[\\]]+")
+            .findAll(raw.uppercase())
+            .map { it.value }
+            .toList()
+            .asReversed()
+        return tokens.firstNotNullOfOrNull { token ->
+            decodeSeedToken(token, countryCode)
+        }
+    }
+
+    private fun decodeSeedToken(token: String, countryCode: String?): Int? {
+        if (token.isBlank()) return null
+        val compact = token
+            .replace('[', 'I')
+            .replace(']', 'I')
+            .replace('|', 'I')
+            .uppercase()
+
+        if (normalizeCountryCodeToken(compact) != null) return null
+        val iso2 = ISO3_TO_ISO2[countryCode].orEmpty()
+        if (compact == countryCode || compact == iso2) return null
+
+        val inner = Regex("^[IL]?([A-Z0-9]{1,3})[IL1]$").matchEntire(compact)?.groupValues?.getOrNull(1)
+        val candidates = buildList {
+            add(compact)
+            if (inner != null) add(inner)
+            add(compact.trimStart('I', 'L').trimEnd('I', 'L', '1'))
+        }
+
+        for (candidate in candidates) {
+            val digits = candidate
+                .replace('Z', '7')
+                .replace('S', '5')
+                .replace('O', '0')
+                .replace('B', '8')
+                .replace('I', '1')
+                .replace('L', '1')
+                .filter { it.isDigit() }
+            if (digits.isBlank()) continue
+            digits.toIntOrNull()?.let { value ->
+                if (value in 1..32) return value
+            }
+            digits.firstOrNull()?.digitToIntOrNull()?.let { single ->
+                if (single in 1..9) return single
+            }
+        }
+        return null
+    }
+
     private fun normalizeCountryCodeToken(token: String): String? {
         if (token.isBlank()) return null
         val corrected = token
             .uppercase()
+            .replace('|', 'I')
             .replace('0', 'O')
             .replace('1', 'I')
             .replace('2', 'Z')
@@ -1947,15 +2025,38 @@ class AppRepository @Inject constructor(
             }
         }
 
-        return variants.firstOrNull { candidate ->
+        val direct = variants.firstOrNull { candidate ->
             candidate in ISO3_TO_ISO2.keys || candidate in ISO2_CODES
-        }?.let { candidate ->
+        }
+        val resolved = direct ?: variants
+            .mapNotNull { variant -> bestIso3Match(variant) }
+            .firstOrNull()
+
+        return resolved?.let { candidate ->
             if (candidate.length == 2) {
                 ISO3_TO_ISO2.entries.firstOrNull { it.value == candidate }?.key ?: candidate
             } else {
                 candidate
             }
         }
+    }
+
+    private fun bestIso3Match(candidate: String): String? {
+        if (candidate.length < 3) return null
+        val windows = if (candidate.length == 3) {
+            listOf(candidate)
+        } else {
+            (0..candidate.length - 3).map { start -> candidate.substring(start, start + 3) }
+        }
+        return windows.firstNotNullOfOrNull { token ->
+            ISO3_TO_ISO2.keys.minByOrNull { iso -> mismatchCount(token, iso) }
+                ?.takeIf { iso -> mismatchCount(token, iso) <= 1 }
+        }
+    }
+
+    private fun mismatchCount(left: String, right: String): Int {
+        if (left.length != right.length) return Int.MAX_VALUE
+        return left.indices.count { left[it] != right[it] }
     }
 
     private fun isPotentialEntrantLine(value: String): Boolean {
@@ -1968,6 +2069,47 @@ class AppRepository @Inject constructor(
         if (isNoiseLine(normalized) || isSeedToken(normalized) || isScoreLine(normalized)) return false
         if (normalized.equals("GS", ignoreCase = true) || normalized.equals("BS", ignoreCase = true)) return false
         return normalized.any { it.isLetter() }
+    }
+
+    private fun cleanupNameTokens(tokens: List<String>): List<String> {
+        if (tokens.isEmpty()) return emptyList()
+        val filtered = tokens.filter { token ->
+            token.any { it.isLetter() } &&
+                token.length > 1 &&
+                !token.equals("VS", ignoreCase = true)
+        }.toMutableList()
+
+        while (filtered.size >= 3 && isLikelyNoiseNameToken(filtered.last())) {
+            filtered.removeAt(filtered.lastIndex)
+        }
+        return filtered
+    }
+
+    private fun isLikelyNoiseNameToken(token: String): Boolean {
+        val normalized = token.lowercase()
+        if (normalized in OCR_NOISE_TOKENS) return true
+        return token.length <= 3 && token.all { it in "IiLlZzSsrR0123456789" }
+    }
+
+    private fun normalizePersonNameCase(name: String): String {
+        return name
+            .split(' ')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { token ->
+                token
+                    .split('-')
+                    .joinToString("-") { hyphenPart ->
+                        hyphenPart
+                            .split('\'')
+                            .joinToString("'") { apostrophePart ->
+                                apostrophePart
+                                    .lowercase()
+                                    .replaceFirstChar { first ->
+                                        if (first.isLowerCase()) first.titlecase() else first.toString()
+                                    }
+                            }
+                    }
+            }
     }
 
     private fun extractTournamentName(lines: List<String>): String? {
@@ -2135,9 +2277,11 @@ class AppRepository @Inject constructor(
 
     private fun parseEntrant(raw: String): ParsedEntrant? {
         val matchedCountry = detectCountryCode(raw)
+        val seed = detectSeed(raw, matchedCountry)
 
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
+            .replace(Regex("\\((\\d{1,2})\\)"), " ")
             .replace(Regex("\\([A-Za-z0-9]{2,6}\\)"), " ")
             .replace(Regex("(?i)\\b(?:GS|BS)\\b"), " ")
             .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
@@ -2150,7 +2294,7 @@ class AppRepository @Inject constructor(
             .normalizeSpaces()
             .trim()
         if (cleaned.isBlank()) return null
-        val name = cleaned
+        val tokens = cleaned
             .split(' ')
             .filter { token ->
                 token.isNotBlank() &&
@@ -2158,11 +2302,16 @@ class AppRepository @Inject constructor(
                     !token.equals(matchedCountry, ignoreCase = true) &&
                     !token.equals(ISO3_TO_ISO2[matchedCountry], ignoreCase = true)
             }
-            .joinToString(" ")
-            .normalizeSpaces()
-            .trim()
+        val normalizedTokens = cleanupNameTokens(tokens)
+        if (normalizedTokens.isEmpty()) return null
+        if (normalizedTokens.size == 1 && normalizedTokens.first().length < 4) return null
+        val name = normalizePersonNameCase(normalizedTokens.joinToString(" ").normalizeSpaces())
         if (name.isBlank()) return null
-        return ParsedEntrant(name = name, countryCode = matchedCountry)
+        return ParsedEntrant(
+            name = name,
+            countryCode = matchedCountry,
+            seed = seed,
+        )
     }
 
     private fun findScheduleContext(lines: List<String>, aroundIndex: Int): ScheduleContext {
@@ -2326,6 +2475,7 @@ class AppRepository @Inject constructor(
     private data class ParsedEntrant(
         val name: String,
         val countryCode: String?,
+        val seed: Int?,
     )
 
     private data class ParsedPair(
@@ -2421,6 +2571,7 @@ class AppRepository @Inject constructor(
             "UKR" to "UA",
         )
         val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
+        val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr")
     }
 }
 
