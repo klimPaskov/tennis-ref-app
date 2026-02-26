@@ -1672,6 +1672,8 @@ class AppRepository @Inject constructor(
     private fun detectCourtColumns(lines: List<OcrLine>): List<CourtColumnLayout> {
         val minTop = lines.minOfOrNull { it.top } ?: return emptyList()
         val maxBottom = lines.maxOfOrNull { it.bottom } ?: return emptyList()
+        val minLeft = lines.minOfOrNull { it.left } ?: return emptyList()
+        val maxRight = lines.maxOfOrNull { it.right } ?: return emptyList()
         val topBandLimit = minTop + (maxBottom - minTop) * 0.25f
         val byName = linkedMapOf<String, OcrLine>()
         lines.asSequence()
@@ -1686,16 +1688,28 @@ class AppRepository @Inject constructor(
 
         val headers = byName.entries.sortedBy { it.value.centerX }
         if (headers.isEmpty()) return emptyList()
+        val centers = headers.map { it.value.centerX }
         return headers.mapIndexed { index, entry ->
             val leftBoundary = if (index == 0) {
-                Float.NEGATIVE_INFINITY
+                if (centers.size > 1) {
+                    (centers[0] - (centers[1] - centers[0]) / 2f).coerceAtMost(centers[0] - 8f)
+                        .coerceAtLeast(minLeft - 8f)
+                } else {
+                    minLeft - 8f
+                }
             } else {
-                (headers[index - 1].value.centerX + entry.value.centerX) / 2f
+                (centers[index - 1] + centers[index]) / 2f
             }
             val rightBoundary = if (index == headers.lastIndex) {
-                Float.POSITIVE_INFINITY
+                if (centers.size > 1) {
+                    (centers.last() + (centers.last() - centers[centers.lastIndex - 1]) / 2f)
+                        .coerceAtLeast(centers.last() + 8f)
+                        .coerceAtMost(maxRight + 8f)
+                } else {
+                    maxRight + 8f
+                }
             } else {
-                (entry.value.centerX + headers[index + 1].value.centerX) / 2f
+                (centers[index] + centers[index + 1]) / 2f
             }
             CourtColumnLayout(
                 name = entry.key,
@@ -1712,7 +1726,7 @@ class AppRepository @Inject constructor(
         val maxBottom = lines.maxOfOrNull { it.bottom } ?: return emptyList()
 
         val rowMarkers = lines
-            .filter { it.centerX < firstColumn.leftBoundary }
+            .filter { it.centerX < firstColumn.leftBoundary + 24f && it.top >= headerBottom }
             .mapNotNull { line ->
                 parseRowNumber(line.text)?.let { line.centerY }
             }
@@ -1727,14 +1741,12 @@ class AppRepository @Inject constructor(
         } else {
             lines
                 .filter { line ->
-                    line.centerX >= firstColumn.leftBoundary &&
-                        line.centerX < firstColumn.rightBoundary &&
                         line.top >= headerBottom &&
                         containsScheduleKeyword(line.text)
                 }
                 .sortedBy { it.centerY }
                 .fold(mutableListOf<Float>()) { acc, line ->
-                    if (acc.isEmpty() || abs(acc.last() - line.centerY) > 16f) {
+                    if (acc.isEmpty() || abs(acc.last() - line.centerY) > 20f) {
                         acc += line.centerY
                     }
                     acc
@@ -1773,33 +1785,51 @@ class AppRepository @Inject constructor(
     private fun parseMatchPairFromCellLines(cellLines: List<OcrLine>): Pair<ParsedEntrant, ParsedEntrant>? {
         if (cellLines.isEmpty()) return null
 
+        val inlineCandidates = mutableListOf<Pair<ParsedEntrant, ParsedEntrant>>()
         cellLines.forEach { line ->
             val inline = extractInlinePair(line.text) ?: return@forEach
             val left = parseEntrant(inline.leftRaw) ?: return@forEach
             val right = parseEntrant(inline.rightRaw) ?: return@forEach
             if (!left.name.equals(right.name, ignoreCase = true)) {
-                return left to right
+                inlineCandidates += left to right
+            }
+        }
+        if (inlineCandidates.isNotEmpty()) {
+            return inlineCandidates.minByOrNull { (left, right) ->
+                left.name.split(' ').size + right.name.split(' ').size
             }
         }
 
         val vsIndex = cellLines.indexOfFirst { isVsToken(it.text) }
-        if (vsIndex == -1) return null
-        val leftRaw = cellLines
-            .subList(0, vsIndex)
-            .asReversed()
-            .firstOrNull { isPotentialEntrantLine(it.text) }
-            ?.text
-            ?: return null
-        val rightRaw = cellLines
-            .drop(vsIndex + 1)
-            .firstOrNull { isPotentialEntrantLine(it.text) }
-            ?.text
-            ?: return null
+        if (vsIndex != -1) {
+            val leftRaw = cellLines
+                .subList(0, vsIndex)
+                .asReversed()
+                .firstOrNull { isPotentialEntrantLine(it.text) }
+                ?.text
+            val rightRaw = cellLines
+                .drop(vsIndex + 1)
+                .firstOrNull { isPotentialEntrantLine(it.text) }
+                ?.text
+            if (!leftRaw.isNullOrBlank() && !rightRaw.isNullOrBlank()) {
+                val left = parseEntrant(leftRaw)
+                val right = parseEntrant(rightRaw)
+                if (left != null && right != null && !left.name.equals(right.name, ignoreCase = true)) {
+                    return left to right
+                }
+            }
+        }
 
-        val left = parseEntrant(leftRaw) ?: return null
-        val right = parseEntrant(rightRaw) ?: return null
-        if (left.name.equals(right.name, ignoreCase = true)) return null
-        return left to right
+        val fallbackEntrants = cellLines
+            .mapNotNull { line -> line.text.takeIf { isPotentialEntrantLine(it) }?.let(::parseEntrant) }
+        if (fallbackEntrants.size >= 2) {
+            val left = fallbackEntrants[0]
+            val right = fallbackEntrants[1]
+            if (!left.name.equals(right.name, ignoreCase = true)) {
+                return left to right
+            }
+        }
+        return null
     }
 
     private fun parseScheduleContextFromCell(cellLines: List<OcrLine>): ScheduleContext {
@@ -1810,12 +1840,7 @@ class AppRepository @Inject constructor(
 
     private fun parseScheduleContextFromText(raw: String): ScheduleContext {
         val normalized = raw.normalizeSpaces()
-        val label = when {
-            normalized.contains("Not Before", ignoreCase = true) -> "Not Before"
-            normalized.contains("Starting at", ignoreCase = true) -> "Starting at"
-            normalized.contains("Followed By", ignoreCase = true) -> "Followed By"
-            else -> "Followed By"
-        }
+        val label = scheduleKeywordLabel(normalized) ?: "Followed By"
         val time = extractTime(normalized)
         val manualNotBefore = if (label == "Not Before" || label == "Starting at") {
             time?.let { toTodayMillis(it) }
@@ -1841,10 +1866,96 @@ class AppRepository @Inject constructor(
         return token.toIntOrNull()?.takeIf { it in 1..64 }
     }
 
+    private fun scheduleKeywordLabel(value: String): String? {
+        val compact = value
+            .lowercase()
+            .replace(Regex("[^a-z0-9]"), "")
+        return when {
+            compact.contains("notbefore") -> "Not Before"
+            compact.contains("startingat") -> "Starting at"
+            compact.contains("followedby") || compact.contains("followed") -> "Followed By"
+            else -> null
+        }
+    }
+
     private fun containsScheduleKeyword(value: String): Boolean {
-        return value.contains("Starting at", ignoreCase = true) ||
-            value.contains("Followed By", ignoreCase = true) ||
-            value.contains("Not Before", ignoreCase = true)
+        return scheduleKeywordLabel(value) != null
+    }
+
+    private fun refineInlineEntrantRaw(raw: String, takeTail: Boolean): String {
+        var value = raw
+            .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
+            .replace(Regex("(?i)\\bcourt\\s*[A-Za-z0-9]+\\b"), " ")
+            .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), " ")
+            .normalizeSpaces()
+            .trim()
+
+        if (takeTail && value.contains(')')) {
+            val tail = value.substringAfterLast(')').trim()
+            if (tail.isNotBlank()) value = tail
+        }
+        if (takeTail && value.contains(']')) {
+            val tail = value.substringAfterLast(']').trim()
+            if (tail.isNotBlank()) value = tail
+        }
+
+        val words = value.split(' ').filter { it.isNotBlank() }
+        if (words.size > 5) {
+            value = if (takeTail) {
+                words.takeLast(4).joinToString(" ")
+            } else {
+                words.take(4).joinToString(" ")
+            }
+        }
+        return value.normalizeSpaces().trim()
+    }
+
+    private fun detectCountryCode(raw: String): String? {
+        val candidates = mutableListOf<String>()
+        Regex("\\(([A-Za-z0-9]{2,6})\\)").findAll(raw).forEach { match ->
+            candidates += match.groupValues[1]
+        }
+        Regex("\\b([A-Za-z0-9]{2,6})\\b").findAll(raw).forEach { match ->
+            candidates += match.groupValues[1]
+        }
+        return candidates.firstNotNullOfOrNull { normalizeCountryCodeToken(it) }
+    }
+
+    private fun normalizeCountryCodeToken(token: String): String? {
+        if (token.isBlank()) return null
+        val corrected = token
+            .uppercase()
+            .replace('0', 'O')
+            .replace('1', 'I')
+            .replace('2', 'Z')
+            .replace('5', 'S')
+            .replace('8', 'B')
+            .filter { it.isLetter() }
+        if (corrected.isBlank()) return null
+
+        val variants = linkedSetOf<String>()
+        variants += corrected
+        if (corrected.length >= 2) {
+            variants += corrected.take(2)
+            variants += corrected.takeLast(2)
+        }
+        if (corrected.length >= 3) {
+            variants += corrected.take(3)
+            variants += corrected.takeLast(3)
+            for (start in 0..(corrected.length - 3)) {
+                variants += corrected.substring(start, start + 3)
+            }
+        }
+
+        return variants.firstOrNull { candidate ->
+            candidate in ISO3_TO_ISO2.keys || candidate in ISO2_CODES
+        }?.let { candidate ->
+            if (candidate.length == 2) {
+                ISO3_TO_ISO2.entries.firstOrNull { it.value == candidate }?.key ?: candidate
+            } else {
+                candidate
+            }
+        }
     }
 
     private fun isPotentialEntrantLine(value: String): Boolean {
@@ -2023,18 +2134,11 @@ class AppRepository @Inject constructor(
     }
 
     private fun parseEntrant(raw: String): ParsedEntrant? {
-        val matchedCountry = Regex("\\(([A-Za-z]{3})\\)")
-            .findAll(raw)
-            .map { it.groupValues[1].uppercase() }
-            .firstOrNull { it in ISO3_TO_ISO2.keys }
-            ?: Regex("\\b([A-Za-z]{3})\\b")
-                .findAll(raw)
-                .map { it.groupValues[1].uppercase() }
-                .firstOrNull { it in ISO3_TO_ISO2.keys }
+        val matchedCountry = detectCountryCode(raw)
 
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
-            .replace(Regex("\\([A-Za-z]{3}\\)"), " ")
+            .replace(Regex("\\([A-Za-z0-9]{2,6}\\)"), " ")
             .replace(Regex("(?i)\\b(?:GS|BS)\\b"), " ")
             .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
             .replace(Regex("(?i)^court\\s+[A-Za-z0-9]+\\s*"), "")
@@ -2051,7 +2155,8 @@ class AppRepository @Inject constructor(
             .filter { token ->
                 token.isNotBlank() &&
                     token.any { it.isLetter() } &&
-                    !token.equals(matchedCountry, ignoreCase = true)
+                    !token.equals(matchedCountry, ignoreCase = true) &&
+                    !token.equals(ISO3_TO_ISO2[matchedCountry], ignoreCase = true)
             }
             .joinToString(" ")
             .normalizeSpaces()
@@ -2140,6 +2245,9 @@ class AppRepository @Inject constructor(
             .trim()
         if (leftRaw.isBlank() || rightRaw.isBlank()) return null
 
+        val refinedLeftRaw = refineInlineEntrantRaw(leftRaw, takeTail = true)
+        rightRaw = refineInlineEntrantRaw(rightRaw, takeTail = false)
+
         val scheduleStart = Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before|court\\s+[A-Za-z0-9]+)\\b")
             .find(rightRaw)
             ?.range
@@ -2151,9 +2259,9 @@ class AppRepository @Inject constructor(
             .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), "")
             .normalizeSpaces()
             .trim()
-        if (rightRaw.isBlank()) return null
+        if (refinedLeftRaw.isBlank() || rightRaw.isBlank()) return null
 
-        return InlinePair(leftRaw = leftRaw, rightRaw = rightRaw)
+        return InlinePair(leftRaw = refinedLeftRaw, rightRaw = rightRaw)
     }
 
     private fun isSeedToken(line: String): Boolean {
@@ -2312,6 +2420,7 @@ class AppRepository @Inject constructor(
             "SWE" to "SE",
             "UKR" to "UA",
         )
+        val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
     }
 }
 
