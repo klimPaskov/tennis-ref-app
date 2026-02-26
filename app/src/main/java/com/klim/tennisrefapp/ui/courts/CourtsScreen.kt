@@ -29,7 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -105,12 +104,13 @@ private fun CourtCardItem(
     val court = row.court
     val timerState = row.activeTimerState
     val timerType = timerState?.timerType
+    val statusTint = statusColor(court.status, timerType)
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onTap),
-        border = BorderStroke(2.dp, statusColor(court.status, timerType)),
+        border = BorderStroke(2.dp, statusTint),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -130,7 +130,7 @@ private fun CourtCardItem(
                 Text(
                     text = if (timerType != null) timerLabel(timerType) else statusLabel(court.status),
                     style = MaterialTheme.typography.labelMedium,
-                    color = statusColor(court.status, timerType),
+                    color = statusTint,
                     fontWeight = FontWeight.SemiBold,
                 )
                 if (timerState != null) {
@@ -176,14 +176,15 @@ private fun statusLabel(status: CourtStatus): String {
     }
 }
 
-private fun statusColor(status: CourtStatus, timerType: CourtTimerType? = null): Color {
-    if (timerType == CourtTimerType.WARMUP) return Color(0xFFE91E63)
-    if (timerType != null) return Color(0xFFE53935)
+@Composable
+private fun statusColor(status: CourtStatus, timerType: CourtTimerType? = null): androidx.compose.ui.graphics.Color {
+    if (timerType == CourtTimerType.WARMUP) return MaterialTheme.colorScheme.primary
+    if (timerType != null) return MaterialTheme.colorScheme.error
     return when (status) {
-        CourtStatus.EMPTY -> Color(0xFF9E9E9E)
-        CourtStatus.SCHEDULED -> Color(0xFFE91E63)
-        CourtStatus.IN_PROGRESS -> Color(0xFFF57C00)
-        CourtStatus.COMPLETED -> Color(0xFF2E7D32)
+        CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
+        CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.primary
+        CourtStatus.IN_PROGRESS -> MaterialTheme.colorScheme.tertiary
+        CourtStatus.COMPLETED -> MaterialTheme.colorScheme.secondary
     }
 }
 
