@@ -76,6 +76,9 @@ private fun MatchLogScreen(
                     Text(detail.matchLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     detail.courtName?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     detail.scoreLabel?.let { Text("Score: $it", style = MaterialTheme.typography.bodyMedium) }
+                    matchDurationLabel(detail.startedAtMillis, detail.endedAtMillis)?.let { duration ->
+                        Text(duration, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             items(detail.events, key = { it.id }) { event ->
@@ -99,4 +102,11 @@ private fun MatchLogScreen(
 private fun formatDateTime(timestamp: Long): String {
     val formatter = SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault())
     return formatter.format(Date(timestamp))
+}
+
+private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {
+    val started = startedAtMillis ?: return null
+    val ended = endedAtMillis ?: return null
+    val minutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
+    return "Duration ${minutes}m"
 }

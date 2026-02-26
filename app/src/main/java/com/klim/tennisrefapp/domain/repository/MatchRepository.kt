@@ -2,6 +2,7 @@ package com.klim.tennisrefapp.domain.repository
 
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationGuidance
+import com.klim.tennisrefapp.domain.model.RestPrompt
 
 sealed class StartMatchResult {
     data object Success : StartMatchResult()
@@ -38,6 +39,8 @@ sealed class EndMatchResult {
 interface MatchRepository {
     suspend fun swapSides(matchId: Long)
 
+    suspend fun setScheduledInitialServer(matchId: Long, playerId: Long): Boolean
+
     suspend fun startMatch(
         matchId: Long,
         initialServerPlayerId: Long,
@@ -66,4 +69,6 @@ interface MatchRepository {
     suspend fun assignFirstUnassignedMatch(courtId: Long): Boolean
     suspend fun swapCourtMatches(courtIdA: Long, courtIdB: Long): Boolean
     suspend fun moveMatchToCourt(matchId: Long, courtId: Long?): Boolean
+    suspend fun autoStartMatchFromWarmup(matchId: Long): StartMatchResult
+    suspend fun getRestPrompt(matchId: Long): RestPrompt?
 }

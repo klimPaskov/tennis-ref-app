@@ -9,6 +9,7 @@ import com.klim.tennisrefapp.data.timer.CourtTimerPersistence
 import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.repository.EventLogRepository
+import com.klim.tennisrefapp.domain.repository.MatchRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -17,6 +18,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val eventLogRepository: EventLogRepository,
+    private val matchRepository: MatchRepository,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val courtId = inputData.getLong(KEY_COURT_ID, -1L)
@@ -44,6 +46,9 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
             offenderPlayerId = null,
             message = "TIMER|${timerType.name}|DONE",
         )
+        if (timerType == CourtTimerType.WARMUP) {
+            matchRepository.autoStartMatchFromWarmup(matchId)
+        }
         CourtTimerPersistence.remove(applicationContext, courtId)
         return Result.success()
     }

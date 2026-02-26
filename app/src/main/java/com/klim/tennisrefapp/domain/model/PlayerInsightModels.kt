@@ -14,6 +14,7 @@ data class PlayerDetailInsight(
     val playerId: Long,
     val name: String,
     val countryCode: String?,
+    val currentRestMinutes: Int,
     val completedMatches: List<PlayerMatchSnapshot>,
     val nextMatch: PlayerMatchSnapshot?,
 )

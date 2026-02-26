@@ -5,4 +5,5 @@ import kotlinx.coroutines.flow.Flow
 
 interface PlayerRepository {
     fun observePlayers(): Flow<List<PlayerSummary>>
+    suspend fun updateRestMinutes(playerId: Long, restMinutes: Int): Boolean
 }

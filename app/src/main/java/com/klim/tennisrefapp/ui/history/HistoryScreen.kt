@@ -87,6 +87,9 @@ private fun HistoryScreen(
                             Text(match.matchLabel, style = MaterialTheme.typography.bodyLarge)
                             val score = match.scoreLabel ?: "-"
                             Text("Score: $score", style = MaterialTheme.typography.bodyMedium)
+                            matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { duration ->
+                                Text(duration, style = MaterialTheme.typography.bodySmall)
+                            }
                             match.endedAtMillis?.let { endedAt ->
                                 Text("Ended: ${formatDateTime(endedAt)}", style = MaterialTheme.typography.bodySmall)
                             }
@@ -101,4 +104,11 @@ private fun HistoryScreen(
 private fun formatDateTime(timestamp: Long): String {
     val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
+}
+
+private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {
+    val started = startedAtMillis ?: return null
+    val ended = endedAtMillis ?: return null
+    val minutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
+    return "Duration ${minutes}m"
 }

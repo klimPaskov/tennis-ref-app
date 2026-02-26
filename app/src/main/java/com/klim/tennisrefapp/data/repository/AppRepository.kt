@@ -38,6 +38,8 @@ import com.klim.tennisrefapp.domain.model.PlayerMatchSnapshot
 import com.klim.tennisrefapp.domain.model.PlayerOverview
 import com.klim.tennisrefapp.domain.model.PlayerRef
 import com.klim.tennisrefapp.domain.model.PlayerSummary
+import com.klim.tennisrefapp.domain.model.RestPrompt
+import com.klim.tennisrefapp.domain.model.RestPromptPlayer
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.SlotReference
 import com.klim.tennisrefapp.domain.model.SlotPositionRef
@@ -66,9 +68,11 @@ import com.klim.tennisrefapp.domain.usecase.ComputeNotBeforeUseCase
 import com.klim.tennisrefapp.domain.usecase.ResolveSlotUseCase
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -297,7 +301,9 @@ class AppRepository @Inject constructor(
     }
 
     override suspend fun reloadOrderOfPlay() {
-        database.clearAllTables()
+        withContext(Dispatchers.IO) {
+            database.clearAllTables()
+        }
         seedIfEmpty()
     }
 
@@ -312,6 +318,15 @@ class AppRepository @Inject constructor(
                 )
             }
         }
+    }
+
+    override suspend fun updateRestMinutes(playerId: Long, restMinutes: Int): Boolean {
+        val normalized = restMinutes.coerceIn(0, 180)
+        val updated = playerDao.updateRestMinutes(playerId, normalized) > 0
+        if (updated) {
+            recomputeNotBeforeAndSchedule()
+        }
+        return updated
     }
 
     override fun observePlayerOverviews(): Flow<List<PlayerOverview>> {
@@ -447,6 +462,7 @@ class AppRepository @Inject constructor(
                 playerId = player.id,
                 name = player.displayName,
                 countryCode = player.countryCode,
+                currentRestMinutes = player.restMinutes ?: context.defaultRestMinutes,
                 completedMatches = completed,
                 nextMatch = next,
             )
@@ -734,6 +750,37 @@ class AppRepository @Inject constructor(
 
             slotDao.update(left.copy(position = SlotPosition.RIGHT))
             slotDao.update(right.copy(position = SlotPosition.LEFT))
+            matchDao.update(match.copy(initialServerPlayerId = null))
+        }
+    }
+
+    override suspend fun setScheduledInitialServer(matchId: Long, playerId: Long): Boolean {
+        return database.withTransaction {
+            val match = matchDao.getById(matchId) ?: return@withTransaction false
+            if (match.status != MatchStatus.SCHEDULED) return@withTransaction false
+
+            val allMatches = matchDao.getAll()
+            val allSlots = slotDao.getAll()
+            val players = playerDao.getAll()
+            val teamPlayers = teamPlayerDao.getAll()
+            val tournament = tournamentDao.getFirst()
+            val context = BuildContext(
+                matches = allMatches,
+                slotsByMatch = allSlots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+
+            val left = sideForMatch(match.id, SlotPosition.LEFT, context)
+            val right = sideForMatch(match.id, SlotPosition.RIGHT, context)
+            val validServerIds = left?.players.orEmpty().map { it.playerId } + right?.players.orEmpty().map { it.playerId }
+            if (playerId !in validServerIds) return@withTransaction false
+
+            matchDao.update(match.copy(initialServerPlayerId = playerId))
+            true
         }
     }
 
@@ -966,6 +1013,85 @@ class AppRepository @Inject constructor(
         }.also {
             if (it) recomputeNotBeforeAndSchedule()
         }
+    }
+
+    override suspend fun autoStartMatchFromWarmup(matchId: Long): StartMatchResult {
+        val match = matchDao.getById(matchId) ?: return StartMatchResult.MatchNotFound
+        val initialServerPlayerId = match.initialServerPlayerId ?: return StartMatchResult.InvalidInitialServer
+        return startMatch(
+            matchId = matchId,
+            initialServerPlayerId = initialServerPlayerId,
+        )
+    }
+
+    override suspend fun getRestPrompt(matchId: Long): RestPrompt? {
+        val match = matchDao.getById(matchId) ?: return null
+        if (match.status != MatchStatus.COMPLETED) return null
+        val startedAt = match.startedAt ?: return null
+        val endedAt = match.endedAt ?: return null
+        val durationMinutes = ((endedAt - startedAt).coerceAtLeast(0L) / 60_000L).toInt()
+        if (durationMinutes < REST_PROMPT_MIN_MATCH_MINUTES) return null
+
+        val matches = matchDao.getAll()
+        val slots = slotDao.getAll()
+        val players = playerDao.getAll()
+        val teamPlayers = teamPlayerDao.getAll()
+        val tournament = tournamentDao.getFirst()
+        val courtsById = courtDao.getAll().associateBy { it.id }
+        val context = BuildContext(
+            matches = matches,
+            slotsByMatch = slots.groupBy { it.matchId },
+            playersById = players.associateBy { it.id },
+            teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+            },
+            defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+        )
+
+        val participantIds = mutableSetOf<Long>()
+        listOfNotNull(match.initialLeftTeamId, match.initialRightTeamId).forEach { teamId ->
+            context.teamPlayersByTeam[teamId].orEmpty().forEach { player -> participantIds += player.id }
+        }
+        if (participantIds.isEmpty()) {
+            val left = sideForMatch(match.id, SlotPosition.LEFT, context)
+            val right = sideForMatch(match.id, SlotPosition.RIGHT, context)
+            left?.players.orEmpty().forEach { participantIds += it.playerId }
+            right?.players.orEmpty().forEach { participantIds += it.playerId }
+        }
+        if (participantIds.isEmpty()) return null
+
+        val restPlayers = participantIds.mapNotNull { playerId ->
+            val player = context.playersById[playerId] ?: return@mapNotNull null
+            val upcoming = matches
+                .asSequence()
+                .filter { candidate ->
+                    candidate.id != match.id &&
+                        (candidate.status == MatchStatus.SCHEDULED || candidate.status == MatchStatus.IN_PROGRESS) &&
+                        matchHasPlayer(candidate.id, playerId, context)
+                }
+                .sortedWith(
+                    compareBy<MatchEntity> { computeNotBefore(it, context) ?: Long.MAX_VALUE }
+                        .thenBy { it.id },
+                )
+                .firstOrNull()
+                ?: return@mapNotNull null
+
+            RestPromptPlayer(
+                playerId = player.id,
+                playerName = player.displayName,
+                countryCode = player.countryCode,
+                suggestedRestMinutes = player.restMinutes ?: context.defaultRestMinutes,
+                upcomingMatchLabel = formatMatchLabel(upcoming, context),
+                upcomingCourtName = upcoming.courtId?.let { courtsById[it]?.name ?: "Court $it" },
+            )
+        }.sortedBy { it.playerName }
+
+        if (restPlayers.isEmpty()) return null
+        return RestPrompt(
+            matchId = match.id,
+            matchDurationMinutes = durationMinutes,
+            players = restPlayers,
+        )
     }
 
     override suspend fun logEvent(
@@ -1288,6 +1414,7 @@ class AppRepository @Inject constructor(
 
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
+        const val REST_PROMPT_MIN_MATCH_MINUTES = 60
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
             "CHN" to "CN",

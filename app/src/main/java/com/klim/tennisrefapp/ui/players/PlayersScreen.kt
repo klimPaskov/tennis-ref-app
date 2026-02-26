@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -34,7 +36,12 @@ fun PlayersRoute(
     viewModel: PlayersViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    PlayersScreen(uiState = uiState, onBack = onBack, onPlayerClick = onPlayerClick)
+    PlayersScreen(
+        uiState = uiState,
+        onBack = onBack,
+        onPlayerClick = onPlayerClick,
+        onSortSelected = viewModel::onSortSelected,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,6 +50,7 @@ private fun PlayersScreen(
     uiState: PlayersUiState,
     onBack: () -> Unit,
     onPlayerClick: (Long) -> Unit,
+    onSortSelected: (PlayersSort) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -61,6 +69,17 @@ private fun PlayersScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(PlayersSort.entries) { sort ->
+                        FilterChip(
+                            selected = uiState.sort == sort,
+                            onClick = { onSortSelected(sort) },
+                            label = { Text(playersSortLabel(sort)) },
+                        )
+                    }
+                }
+            }
             items(uiState.players, key = { it.playerId }) { player ->
                 Card(
                     modifier = Modifier
@@ -92,6 +111,15 @@ private fun PlayersScreen(
                 }
             }
         }
+    }
+}
+
+private fun playersSortLabel(sort: PlayersSort): String {
+    return when (sort) {
+        PlayersSort.NAME -> "Name"
+        PlayersSort.COMPLETED -> "Completed"
+        PlayersSort.NEXT_MATCH -> "Next Match"
+        PlayersSort.UPCOMING_FIRST -> "Upcoming First"
     }
 }
 

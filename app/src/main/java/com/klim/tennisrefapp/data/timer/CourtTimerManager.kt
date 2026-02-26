@@ -63,6 +63,8 @@ class CourtTimerManager @Inject constructor(
 
     fun observeTimer(courtId: Long): Flow<CourtTimerState?> = state.map { it[courtId] }
 
+    fun observeAllTimers(): Flow<Map<Long, CourtTimerState>> = state
+
     fun startOrRestart(
         courtId: Long,
         matchId: Long,
@@ -168,15 +170,7 @@ class CourtTimerManager @Inject constructor(
         val now = System.currentTimeMillis()
         CourtTimerPersistence.loadAll(appContext).forEach { timer ->
             if (timer.endAtMillis <= now) {
-                cancelFinishWorker(timer.courtId)
-                CourtTimerPersistence.remove(appContext, timer.courtId)
-                CourtTimerAlerts.notifyFinished(
-                    context = appContext,
-                    courtId = timer.courtId,
-                    courtName = timer.courtName,
-                    timerType = timer.timerType,
-                )
-                logTimerEvent(timer.courtId, timer.matchId, timer.timerType, "DONE")
+                scheduleFinishWorker(timer.copy(endAtMillis = now))
                 state.value = state.value.toMutableMap().also { map ->
                     map[timer.courtId] = CourtTimerState(
                         courtId = timer.courtId,

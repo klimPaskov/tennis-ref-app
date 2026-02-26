@@ -10,6 +10,7 @@ import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
+import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.CourtRepository
@@ -18,6 +19,7 @@ import com.klim.tennisrefapp.domain.repository.EventLogRepository
 import com.klim.tennisrefapp.domain.repository.MatchRepository
 import com.klim.tennisrefapp.domain.repository.MatchResultType
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
+import com.klim.tennisrefapp.domain.repository.PlayerRepository
 import com.klim.tennisrefapp.domain.repository.StartMatchResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -39,6 +41,7 @@ data class CourtDetailUiState(
     val timerState: CourtTimerState? = null,
     val matchEvents: List<MatchEvent> = emptyList(),
     val violationCountsByPlayer: Map<Long, ViolationCounts> = emptyMap(),
+    val restPrompt: RestPrompt? = null,
 )
 
 data class UiFeedback(
@@ -52,6 +55,7 @@ class CourtDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val courtRepository: CourtRepository,
     private val matchRepository: MatchRepository,
+    private val playerRepository: PlayerRepository,
     private val eventLogRepository: EventLogRepository,
     private val timerManager: CourtTimerManager,
 ) : ViewModel() {
@@ -59,6 +63,7 @@ class CourtDetailViewModel @Inject constructor(
     private val courtId: Long = checkNotNull(savedStateHandle.get<Long>("courtId"))
     private val selectedServerPlayerId = MutableStateFlow<Long?>(null)
     private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
+    private val restPrompt = MutableStateFlow<RestPrompt?>(null)
     private var warmupCompletedForMatchId: Long? = null
 
     private val detailFlow: Flow<CourtDetail?> = courtRepository.observeCourtDetail(courtId)
@@ -78,15 +83,17 @@ class CourtDetailViewModel @Inject constructor(
         detailFlow,
         selectedServerPlayerId,
         feedbackMessage,
+        restPrompt,
         timerFlow,
         eventsFlow,
     ) { values ->
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
         val feedback = values[2] as UiFeedback?
-        val timer = values[3] as CourtTimerState?
+        val prompt = values[3] as RestPrompt?
+        val timer = values[4] as CourtTimerState?
         @Suppress("UNCHECKED_CAST")
-        val events = values[4] as List<MatchEvent>
+        val events = values[5] as List<MatchEvent>
         val allowedServerIds = buildList {
             addAll(detail?.leftSide?.players?.map { it.playerId }.orEmpty())
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
@@ -101,6 +108,7 @@ class CourtDetailViewModel @Inject constructor(
             detail = detail,
             selectedServerPlayerId = currentSelection,
             feedbackMessage = feedback,
+            restPrompt = prompt,
             timerState = timer,
             matchEvents = events,
             violationCountsByPlayer = countViolations(events),
@@ -124,8 +132,16 @@ class CourtDetailViewModel @Inject constructor(
 
     fun onSelectServer(playerId: Long) {
         val detail = uiState.value.detail ?: return
+        val matchId = detail.matchId ?: return
         if (!detail.canStartMatch) return
-        selectedServerPlayerId.value = playerId
+        viewModelScope.launch {
+            val updated = matchRepository.setScheduledInitialServer(matchId, playerId)
+            if (updated) {
+                selectedServerPlayerId.value = playerId
+            } else {
+                feedbackMessage.value = UiFeedback("Unable to set initial server.")
+            }
+        }
     }
 
     fun onSwapSides() {
@@ -136,6 +152,7 @@ class CourtDetailViewModel @Inject constructor(
             warmupCompletedForMatchId = null
             selectedServerPlayerId.value = null
             feedbackMessage.value = null
+            restPrompt.value = null
         }
     }
 
@@ -223,7 +240,15 @@ class CourtDetailViewModel @Inject constructor(
                 scoreText = scoreText,
             )
             feedbackMessage.value = when (result) {
-                EndMatchResult.Success -> UiFeedback("Final score submitted")
+                EndMatchResult.Success -> {
+                    val prompt = matchRepository.getRestPrompt(matchId)
+                    restPrompt.value = prompt
+                    if (prompt == null) {
+                        UiFeedback("Final score submitted")
+                    } else {
+                        UiFeedback("Final score submitted. Set player rest preferences.")
+                    }
+                }
                 EndMatchResult.MatchNotFound -> UiFeedback("Match not found")
                 EndMatchResult.InvalidMatchState -> UiFeedback("Match must be in progress")
                 EndMatchResult.MissingResolvedParticipants -> UiFeedback("Unable to determine winner teams")
@@ -231,24 +256,26 @@ class CourtDetailViewModel @Inject constructor(
         }
     }
 
-    fun onMoveMatchToCourt(courtId: Long?) {
-        val matchId = uiState.value.detail?.matchId ?: return
-        viewModelScope.launch {
-            val moved = matchRepository.moveMatchToCourt(matchId, courtId)
-            feedbackMessage.value = UiFeedback(if (moved) {
-                if (courtId == null) "Match moved to unassigned" else "Match moved to new court"
-            } else {
-                "Failed to move match"
-            })
-        }
+    fun onDismissRestPrompt() {
+        restPrompt.value = null
     }
 
-    fun onSwapWithCourt(otherCourtId: Long) {
-        val currentCourtId = uiState.value.detail?.courtId ?: return
-        if (otherCourtId == currentCourtId) return
+    fun onApplyRestChoices(choices: Map<Long, Int>) {
+        if (choices.isEmpty()) {
+            restPrompt.value = null
+            return
+        }
         viewModelScope.launch {
-            val swapped = matchRepository.swapCourtMatches(currentCourtId, otherCourtId)
-            feedbackMessage.value = UiFeedback(if (swapped) "Court matches swapped" else "No matches to swap")
+            var updated = 0
+            choices.forEach { (playerId, minutes) ->
+                if (playerRepository.updateRestMinutes(playerId, minutes)) {
+                    updated += 1
+                }
+            }
+            restPrompt.value = null
+            feedbackMessage.value = UiFeedback(
+                if (updated > 0) "Rest preferences updated." else "No rest preferences were updated.",
+            )
         }
     }
 
@@ -291,10 +318,7 @@ class CourtDetailViewModel @Inject constructor(
         if (warmupCompletedForMatchId == matchId) return
 
         warmupCompletedForMatchId = matchId
-        val result = matchRepository.startMatch(
-            matchId = matchId,
-            initialServerPlayerId = selectedServer,
-        )
+        val result = matchRepository.autoStartMatchFromWarmup(matchId)
         feedbackMessage.value = when (result) {
             StartMatchResult.Success -> UiFeedback("Warm-up finished. Match started.")
             StartMatchResult.MatchNotFound -> UiFeedback("Match not found")

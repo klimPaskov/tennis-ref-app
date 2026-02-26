@@ -15,16 +15,25 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.text.KeyboardOptions
 
 @Composable
 fun PlayerDetailRoute(
@@ -32,7 +41,20 @@ fun PlayerDetailRoute(
     viewModel: PlayerDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    PlayerDetailScreen(uiState = uiState, onBack = onBack)
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.message) {
+        val message = uiState.message ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        viewModel.clearMessage()
+    }
+
+    PlayerDetailScreen(
+        uiState = uiState,
+        onBack = onBack,
+        onUpdateRestMinutes = viewModel::onUpdateRestMinutes,
+        snackbarHostState = snackbarHostState,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,8 +62,13 @@ fun PlayerDetailRoute(
 private fun PlayerDetailScreen(
     uiState: PlayerDetailUiState,
     onBack: () -> Unit,
+    onUpdateRestMinutes: (Int) -> Unit,
+    snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
+    var restInput by remember(detail?.playerId, detail?.currentRestMinutes) {
+        mutableStateOf(detail?.currentRestMinutes?.toString().orEmpty())
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -51,6 +78,7 @@ private fun PlayerDetailScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
         if (detail == null) {
             Column(
@@ -78,6 +106,31 @@ private fun PlayerDetailScreen(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Rest Minutes", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text("Current: ${detail.currentRestMinutes} min", style = MaterialTheme.typography.bodySmall)
+                        TextField(
+                            value = restInput,
+                            onValueChange = { value -> restInput = value.filter { it.isDigit() }.take(3) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                        TextButton(
+                            onClick = {
+                                val minutes = restInput.toIntOrNull() ?: detail.currentRestMinutes
+                                onUpdateRestMinutes(minutes)
+                            },
+                        ) {
+                            Text("Save Rest")
+                        }
+                    }
+                }
             }
             item {
                 Text("Next Match", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -113,6 +166,9 @@ private fun PlayerDetailScreen(
                         if (!match.scoreLabel.isNullOrBlank()) {
                             Text("Score: ${match.scoreLabel}")
                         }
+                        matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { duration ->
+                            Text(duration)
+                        }
                         match.endedAtMillis?.let { endedAt ->
                             Text("Ended ${formatDateTime(endedAt)}")
                         }
@@ -121,6 +177,16 @@ private fun PlayerDetailScreen(
             }
         }
     }
+}
+
+private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {
+    val started = startedAtMillis ?: return null
+    val ended = endedAtMillis ?: return null
+    val durationMs = (ended - started).coerceAtLeast(0L)
+    val totalMinutes = durationMs / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "Duration ${hours}h ${minutes}m" else "Duration ${minutes}m"
 }
 
 private fun formatDateTime(timestamp: Long): String {

@@ -17,4 +17,7 @@ interface PlayerDao {
 
     @Query("SELECT * FROM players")
     suspend fun getAll(): List<PlayerEntity>
+
+    @Query("UPDATE players SET restMinutes = :restMinutes WHERE id = :playerId")
+    suspend fun updateRestMinutes(playerId: Long, restMinutes: Int): Int
 }

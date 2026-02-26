@@ -26,7 +26,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
             tournamentRepository.reloadOrderOfPlay()
-            _uiState.value = HomeUiState(isReloading = false, message = "Order of play loaded.")
+            _uiState.value = HomeUiState(isReloading = false, message = "New order of play loaded.")
         }
     }
 

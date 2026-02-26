@@ -71,20 +71,20 @@ private fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
-                Text("Continue Order Of Play")
-            }
-            Button(
-                onClick = onReload,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !uiState.isReloading,
-            ) {
-                Text(if (uiState.isReloading) "Loading..." else "Load Order Of Play")
+                Text("Courts")
             }
             Button(onClick = onPlayers, modifier = Modifier.fillMaxWidth()) {
                 Text("Players")
             }
             Button(onClick = onHistory, modifier = Modifier.fillMaxWidth()) {
                 Text("History")
+            }
+            Button(
+                onClick = onReload,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !uiState.isReloading,
+            ) {
+                Text(if (uiState.isReloading) "Loading..." else "New Order Of Play")
             }
         }
     }

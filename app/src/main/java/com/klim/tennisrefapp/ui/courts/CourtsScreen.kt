@@ -31,7 +31,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.klim.tennisrefapp.domain.model.CourtCard
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
 
@@ -55,7 +54,7 @@ fun CourtsRoute(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CourtsScreen(
-    courts: List<CourtCard>,
+    courts: List<CourtListItemUi>,
     onCourtClick: (Long) -> Unit,
     onNext: (Long) -> Unit,
     onBack: () -> Unit,
@@ -81,11 +80,11 @@ private fun CourtsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(courts, key = { it.courtId }) { court ->
+            items(courts, key = { it.court.courtId }) { row ->
                 CourtCardItem(
-                    court = court,
-                    onTap = { onCourtClick(court.courtId) },
-                    onNext = { onNext(court.courtId) },
+                    row = row,
+                    onTap = { onCourtClick(row.court.courtId) },
+                    onNext = { onNext(row.court.courtId) },
                 )
             }
         }
@@ -94,15 +93,19 @@ private fun CourtsScreen(
 
 @Composable
 private fun CourtCardItem(
-    court: CourtCard,
+    row: CourtListItemUi,
     onTap: () -> Unit,
     onNext: () -> Unit,
 ) {
+    val court = row.court
+    val warmupState = row.warmupState
+    val isWarmup = warmupState != null
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onTap),
-        border = BorderStroke(2.dp, statusColor(court.status)),
+        border = BorderStroke(2.dp, statusColor(court.status, isWarmup)),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -120,11 +123,17 @@ private fun CourtCardItem(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = statusLabel(court.status),
+                    text = if (isWarmup) "Warming Up" else statusLabel(court.status),
                     style = MaterialTheme.typography.labelMedium,
-                    color = statusColor(court.status),
+                    color = statusColor(court.status, isWarmup),
                 )
-                if (court.status == CourtStatus.SCHEDULED) {
+                if (isWarmup) {
+                    Text(
+                        text = formatRemaining(warmupState?.remainingMillis ?: 0L),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } else if (court.status == CourtStatus.SCHEDULED) {
                     court.computedNotBeforeMillis?.let { notBefore ->
                         Text(
                             text = "Not before ${formatTime(notBefore)}",
@@ -150,7 +159,8 @@ private fun statusLabel(status: CourtStatus): String {
     }
 }
 
-private fun statusColor(status: CourtStatus): Color {
+private fun statusColor(status: CourtStatus, isWarmup: Boolean = false): Color {
+    if (isWarmup) return Color(0xFF8E24AA)
     return when (status) {
         CourtStatus.EMPTY -> Color(0xFF9E9E9E)
         CourtStatus.SCHEDULED -> Color(0xFF1976D2)
@@ -164,18 +174,27 @@ private fun formatTime(timestamp: Long): String {
     return formatter.format(Date(timestamp))
 }
 
+private fun formatRemaining(remainingMillis: Long): String {
+    val totalSeconds = (remainingMillis / 1000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(minutes, seconds)
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun CourtCardItemPreview() {
     TennisRefTheme {
         CourtCardItem(
-            court = CourtCard(
-                courtId = 1,
-                courtName = "Court 2",
-                status = CourtStatus.SCHEDULED,
-                currentMatchLabel = "🇨🇳 Yiyuan Su vs 🇬🇧 Vincent Fletcher",
-                computedNotBeforeMillis = 1_700_000_000_000,
-                matchId = 42,
+            row = CourtListItemUi(
+                court = com.klim.tennisrefapp.domain.model.CourtCard(
+                    courtId = 1,
+                    courtName = "Court 2",
+                    status = CourtStatus.SCHEDULED,
+                    currentMatchLabel = "🇨🇳 Yiyuan Su vs 🇬🇧 Vincent Fletcher",
+                    computedNotBeforeMillis = 1_700_000_000_000,
+                    matchId = 42,
+                ),
             ),
             onTap = {},
             onNext = {},

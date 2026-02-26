@@ -9,9 +9,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -47,6 +51,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -71,6 +76,7 @@ import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.PlayerRef
+import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
@@ -138,6 +144,8 @@ fun CourtDetailRoute(
         onStopTimer = viewModel::onStopTimer,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
+        onDismissRestPrompt = viewModel::onDismissRestPrompt,
+        onApplyRestChoices = viewModel::onApplyRestChoices,
         onUndoViolation = viewModel::onUndoLastViolation,
         snackbarHostState = snackbarHostState,
     )
@@ -155,6 +163,8 @@ private fun CourtDetailScreen(
     onStopTimer: () -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
+    onDismissRestPrompt: () -> Unit,
+    onApplyRestChoices: (Map<Long, Int>) -> Unit,
     onUndoViolation: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
@@ -264,6 +274,15 @@ private fun CourtDetailScreen(
             },
         )
     }
+
+    val restPrompt = uiState.restPrompt
+    if (restPrompt != null) {
+        RestPromptDialog(
+            prompt = restPrompt,
+            onDismiss = onDismissRestPrompt,
+            onConfirm = onApplyRestChoices,
+        )
+    }
 }
 
 @Composable
@@ -309,15 +328,15 @@ private fun ScheduledActions(
     timerState: CourtTimerState?,
     onStartMatchNow: () -> Unit,
 ) {
-    if (selectedServerPlayerId == null) {
-        Text("Select the first server to start warm-up.", style = MaterialTheme.typography.bodyMedium)
-    } else if (timerState?.timerType == CourtTimerType.WARMUP) {
+    if (timerState?.timerType == CourtTimerType.WARMUP) {
         val warmupText = if (timerState.isRunning) {
             "Warm-up: ${formatRemaining(timerState.remainingMillis)}"
         } else {
             "Warm-up complete"
         }
         Text(warmupText, style = MaterialTheme.typography.bodyMedium)
+    } else if (selectedServerPlayerId == null) {
+        Text("Select the first server to start warm-up.", style = MaterialTheme.typography.bodyMedium)
     }
 
     Button(onClick = onStartMatchNow, modifier = Modifier.fillMaxWidth(), enabled = selectedServerPlayerId != null) {
@@ -333,12 +352,16 @@ private fun SidePanels(
     onSwapSides: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ParticipantSideCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
             side = detail.leftSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -353,7 +376,9 @@ private fun SidePanels(
             Icon(Icons.Outlined.SwapHoriz, contentDescription = "Swap sides")
         }
         ParticipantSideCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
             side = detail.rightSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -666,12 +691,20 @@ private fun ParticipantSideCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (isWinner) {
+                Text(
+                    text = "Winner",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             val players = side?.players.orEmpty()
             if (players.isNotEmpty()) {
                 players.forEach { player ->
                     val isSelectedServer = player.playerId == selectedServerPlayerId
                     val backgroundColor = when {
-                        isWinner -> MaterialTheme.colorScheme.tertiaryContainer
+                        isWinner -> MaterialTheme.colorScheme.primaryContainer
                         isSelectedServer -> MaterialTheme.colorScheme.primaryContainer
                         else -> MaterialTheme.colorScheme.surfaceVariant
                     }
@@ -681,6 +714,7 @@ private fun ParticipantSideCard(
                             .fillMaxWidth()
                             .background(backgroundColor, MaterialTheme.shapes.small)
                             .clickable(enabled = canSelectServer, onClick = { onSelectServer(player.playerId) })
+                            .heightIn(min = 92.dp)
                             .padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -749,6 +783,92 @@ private fun ScoreSetRow(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         )
     }
+}
+
+@Composable
+private fun RestPromptDialog(
+    prompt: RestPrompt,
+    onDismiss: () -> Unit,
+    onConfirm: (Map<Long, Int>) -> Unit,
+) {
+    val restByPlayer = remember(prompt) {
+        mutableStateMapOf<Long, String>().apply {
+            prompt.players.forEach { player ->
+                put(player.playerId, player.suggestedRestMinutes.toString())
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rest Request") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Match lasted ${prompt.matchDurationMinutes} minutes. Set rest for players with upcoming matches.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                prompt.players.forEach { player ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = displayPlayerNameWithFlag(player.playerName, player.countryCode),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = "${player.upcomingCourtName ?: "Unassigned"} · ${player.upcomingMatchLabel}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text("Rest (min)", style = MaterialTheme.typography.bodySmall)
+                                TextField(
+                                    value = restByPlayer[player.playerId].orEmpty(),
+                                    onValueChange = { value ->
+                                        restByPlayer[player.playerId] = value.filter { it.isDigit() }.take(3)
+                                    },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val values = prompt.players.associate { player ->
+                        val minutes = restByPlayer[player.playerId]
+                            ?.toIntOrNull()
+                            ?.coerceIn(0, 180)
+                            ?: player.suggestedRestMinutes
+                        player.playerId to minutes
+                    }
+                    onConfirm(values)
+                },
+            ) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Later") }
+        },
+    )
 }
 
 @Composable
@@ -916,8 +1036,12 @@ private fun buildViolationGuidanceSummary(counts: ViolationCounts): String {
 }
 
 private fun displayPlayerLabel(player: PlayerRef): String {
-    val flag = countryCodeToFlagEmoji(player.countryCode)
-    return if (flag != null) "$flag ${player.name}" else player.name
+    return displayPlayerNameWithFlag(player.name, player.countryCode)
+}
+
+private fun displayPlayerNameWithFlag(name: String, countryCode: String?): String {
+    val flag = countryCodeToFlagEmoji(countryCode)
+    return if (flag != null) "$flag $name" else name
 }
 
 private fun splitNameIntoTwoLines(name: String): Pair<String, String?> {
@@ -1065,6 +1189,8 @@ private fun CourtDetailScheduledPreview() {
             onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onDismissRestPrompt = {},
+            onApplyRestChoices = {},
             onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
@@ -1115,6 +1241,8 @@ private fun CourtDetailCompletedPreview() {
             onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onDismissRestPrompt = {},
+            onApplyRestChoices = {},
             onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
