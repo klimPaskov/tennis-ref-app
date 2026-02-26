@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.klim.tennisrefapp.domain.model.MatchEventKind
 
 @Composable
 fun MatchLogRoute(
@@ -87,10 +88,20 @@ private fun MatchLogScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(event.kind.name, style = MaterialTheme.typography.labelLarge)
-                        Text(formatDateTime(event.timestamp), style = MaterialTheme.typography.bodySmall)
-                        if (!event.message.isNullOrBlank()) {
-                            Text(event.message, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = eventTitle(event.kind),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = formatDateTime(event.timestamp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        eventDetails(event.kind, event.message)?.let { details ->
+                            if (details.isNotBlank()) {
+                                Text(details, style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
                     }
                 }
@@ -100,8 +111,56 @@ private fun MatchLogScreen(
 }
 
 private fun formatDateTime(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault())
+    val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
+}
+
+private fun eventTitle(kind: MatchEventKind): String {
+    return when (kind) {
+        MatchEventKind.MATCH_STARTED -> "Match Started"
+        MatchEventKind.MATCH_ENDED -> "Match Ended"
+        MatchEventKind.VIOLATION -> "Violation"
+        MatchEventKind.TIMER -> "Timer"
+    }
+}
+
+private fun eventDetails(kind: MatchEventKind, message: String?): String? {
+    if (message.isNullOrBlank()) return null
+    return when (kind) {
+        MatchEventKind.MATCH_STARTED,
+        MatchEventKind.MATCH_ENDED,
+        -> null
+
+        MatchEventKind.TIMER -> formatTimerMessage(message)
+        MatchEventKind.VIOLATION -> formatViolationMessage(message)
+    }
+}
+
+private fun formatTimerMessage(message: String): String {
+    if (!message.startsWith("TIMER|")) return message
+    val parts = message.split("|")
+    val timerType = parts.getOrNull(1)?.replace('_', ' ')?.lowercase()?.replaceFirstChar { it.uppercase() } ?: "Timer"
+    val action = parts.getOrNull(2)?.lowercase() ?: ""
+    return when (action) {
+        "start" -> "$timerType started"
+        "stop" -> "$timerType stopped"
+        "done" -> "$timerType finished"
+        else -> "$timerType $action".trim()
+    }
+}
+
+private fun formatViolationMessage(message: String): String {
+    if (!message.startsWith("VIOLATION|")) return message
+    val parts = message.split("|")
+    val name = parts.getOrNull(2).orEmpty()
+    val offence = parts.firstOrNull { it.startsWith("offence=") }?.substringAfter("=")
+    val applied = parts.firstOrNull { it.startsWith("applied=") }?.substringAfter("=")
+    val next = parts.firstOrNull { it.startsWith("next=") }?.substringAfter("=")
+    val summary = buildList {
+        if (offence != null && applied != null) add("Offence $offence: $applied")
+        if (next != null) add("Next: $next")
+    }.joinToString(" • ")
+    return if (summary.isBlank()) name else "$name • $summary"
 }
 
 private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {

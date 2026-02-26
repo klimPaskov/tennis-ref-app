@@ -17,7 +17,6 @@ enum class PlayersSort {
     NAME,
     COMPLETED,
     NEXT_MATCH,
-    UPCOMING_FIRST,
 }
 
 data class PlayersUiState(
@@ -43,11 +42,6 @@ class PlayersViewModel @Inject constructor(
             )
             PlayersSort.NEXT_MATCH -> players.sortedWith(
                 compareBy<PlayerOverview> { it.nextNotBeforeMillis ?: Long.MAX_VALUE }
-                    .thenBy { it.name },
-            )
-            PlayersSort.UPCOMING_FIRST -> players.sortedWith(
-                compareBy<PlayerOverview> { if (it.nextMatchLabel != null) 0 else 1 }
-                    .thenBy { it.nextNotBeforeMillis ?: Long.MAX_VALUE }
                     .thenBy { it.name },
             )
         }

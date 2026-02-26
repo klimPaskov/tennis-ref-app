@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -91,11 +93,23 @@ private fun PlayersScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         val flag = countryCodeToFlagEmoji(player.countryCode)
-                        Text(
-                            text = if (flag != null) "$flag ${player.name}" else player.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = if (flag != null) "$flag ${player.name}" else player.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            val nextOnInline = player.nextNotBeforeMillis?.let { formatTime(it) }
+                            Text(
+                                text = nextOnInline ?: "-",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
                         Text("Completed matches: ${player.completedCount}", style = MaterialTheme.typography.bodySmall)
                         if (player.nextMatchLabel != null) {
                             val nextOn = player.nextNotBeforeMillis?.let { formatDateTime(it) } ?: "TBD"
@@ -119,12 +133,16 @@ private fun playersSortLabel(sort: PlayersSort): String {
         PlayersSort.NAME -> "Name"
         PlayersSort.COMPLETED -> "Completed"
         PlayersSort.NEXT_MATCH -> "Next Match"
-        PlayersSort.UPCOMING_FIRST -> "Upcoming First"
     }
 }
 
 private fun formatDateTime(timestamp: Long): String {
     val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
+    return formatter.format(Date(timestamp))
+}
+
+private fun formatTime(timestamp: Long): String {
+    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
 }
 

@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,7 +44,6 @@ fun CourtsRoute(
     CourtsScreen(
         courts = uiState.courts,
         onCourtClick = onCourtClick,
-        onNext = viewModel::onAssignMatch,
         onBack = onBack,
         onOpenHistory = onOpenHistory,
     )
@@ -56,7 +54,6 @@ fun CourtsRoute(
 private fun CourtsScreen(
     courts: List<CourtListItemUi>,
     onCourtClick: (Long) -> Unit,
-    onNext: (Long) -> Unit,
     onBack: () -> Unit,
     onOpenHistory: () -> Unit,
 ) {
@@ -84,7 +81,6 @@ private fun CourtsScreen(
                 CourtCardItem(
                     row = row,
                     onTap = { onCourtClick(row.court.courtId) },
-                    onNext = { onNext(row.court.courtId) },
                 )
             }
         }
@@ -95,7 +91,6 @@ private fun CourtsScreen(
 private fun CourtCardItem(
     row: CourtListItemUi,
     onTap: () -> Unit,
-    onNext: () -> Unit,
 ) {
     val court = row.court
     val warmupState = row.warmupState
@@ -142,10 +137,6 @@ private fun CourtCardItem(
                     }
                 }
             }
-
-            OutlinedButton(onClick = onNext) {
-                Text("Next")
-            }
         }
     }
 }
@@ -163,7 +154,7 @@ private fun statusColor(status: CourtStatus, isWarmup: Boolean = false): Color {
     if (isWarmup) return Color(0xFF8E24AA)
     return when (status) {
         CourtStatus.EMPTY -> Color(0xFF9E9E9E)
-        CourtStatus.SCHEDULED -> Color(0xFF1976D2)
+        CourtStatus.SCHEDULED -> Color(0xFF8E24AA)
         CourtStatus.IN_PROGRESS -> Color(0xFFF57C00)
         CourtStatus.COMPLETED -> Color(0xFF2E7D32)
     }
@@ -197,7 +188,6 @@ private fun CourtCardItemPreview() {
                 ),
             ),
             onTap = {},
-            onNext = {},
         )
     }
 }

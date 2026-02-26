@@ -86,12 +86,20 @@ private fun HistoryScreen(
                         ) {
                             Text(match.matchLabel, style = MaterialTheme.typography.bodyLarge)
                             val score = match.scoreLabel ?: "-"
-                            Text("Score: $score", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = "Score: $score",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                             matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { duration ->
-                                Text(duration, style = MaterialTheme.typography.bodySmall)
+                                Text(duration, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                             }
                             match.endedAtMillis?.let { endedAt ->
-                                Text("Ended: ${formatDateTime(endedAt)}", style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    text = "Ended: ${formatDateTime(endedAt)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
                     }

@@ -9,9 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -353,15 +351,14 @@ private fun SidePanels(
 ) {
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min),
+            .fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .height(236.dp),
             side = detail.leftSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -378,7 +375,7 @@ private fun SidePanels(
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .height(236.dp),
             side = detail.rightSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -724,9 +721,15 @@ private fun ParticipantSideCard(
                             modifier = Modifier.weight(1f),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            AutoSizingNameLine(firstLine)
+                            AutoSizingNameLine(
+                                text = firstLine,
+                                isEmphasized = isWinner,
+                            )
                             if (!secondLine.isNullOrBlank()) {
-                                AutoSizingNameLine(secondLine)
+                                AutoSizingNameLine(
+                                    text = secondLine,
+                                    isEmphasized = isWinner,
+                                )
                             }
                             if (flag != null) {
                                 Text(
@@ -874,6 +877,7 @@ private fun RestPromptDialog(
 @Composable
 private fun AutoSizingNameLine(
     text: String,
+    isEmphasized: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val baseStyle = MaterialTheme.typography.titleLarge
@@ -887,6 +891,7 @@ private fun AutoSizingNameLine(
                 maxWidthPx = availableWidthPx,
                 textMeasurer = textMeasurer,
                 baseStyle = baseStyle,
+                fontWeight = if (isEmphasized) FontWeight.ExtraBold else FontWeight.SemiBold,
                 max = 28.sp,
                 min = 11.sp,
             )
@@ -895,7 +900,7 @@ private fun AutoSizingNameLine(
             text = text,
             style = baseStyle.copy(
                 fontSize = fontSize,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = if (isEmphasized) FontWeight.ExtraBold else FontWeight.SemiBold,
                 lineHeight = (fontSize.value + 2f).sp,
             ),
             textAlign = TextAlign.Center,
@@ -912,6 +917,7 @@ private fun chooseFontSizeToFitLine(
     maxWidthPx: Float,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
     baseStyle: TextStyle,
+    fontWeight: FontWeight,
     max: TextUnit,
     min: TextUnit,
 ): TextUnit {
@@ -919,7 +925,7 @@ private fun chooseFontSizeToFitLine(
     while (size >= min.value) {
         val measured = textMeasurer.measure(
             text = text,
-            style = baseStyle.copy(fontSize = size.sp, fontWeight = FontWeight.SemiBold),
+            style = baseStyle.copy(fontSize = size.sp, fontWeight = fontWeight),
             maxLines = 1,
             softWrap = false,
         )
