@@ -35,11 +35,16 @@ import kotlinx.coroutines.launch
 data class CourtDetailUiState(
     val detail: CourtDetail? = null,
     val selectedServerPlayerId: Long? = null,
-    val feedbackMessage: String? = null,
+    val feedbackMessage: UiFeedback? = null,
     val timerState: CourtTimerState? = null,
     val matchEvents: List<MatchEvent> = emptyList(),
     val violationCountsByPlayer: Map<Long, ViolationCounts> = emptyMap(),
     val availableCourts: List<Pair<Long, String>> = emptyList(),
+)
+
+data class UiFeedback(
+    val message: String,
+    val actionLabel: String? = null,
 )
 
 @HiltViewModel
@@ -54,7 +59,7 @@ class CourtDetailViewModel @Inject constructor(
 
     private val courtId: Long = checkNotNull(savedStateHandle.get<Long>("courtId"))
     private val selectedServerPlayerId = MutableStateFlow<Long?>(null)
-    private val feedbackMessage = MutableStateFlow<String?>(null)
+    private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
 
     private val detailFlow: Flow<CourtDetail?> = courtRepository.observeCourtDetail(courtId)
 
@@ -82,7 +87,7 @@ class CourtDetailViewModel @Inject constructor(
     ) { values ->
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
-        val feedback = values[2] as String?
+        val feedback = values[2] as UiFeedback?
         val timer = values[3] as CourtTimerState?
         @Suppress("UNCHECKED_CAST")
         val events = values[4] as List<MatchEvent>
@@ -132,11 +137,11 @@ class CourtDetailViewModel @Inject constructor(
         val matchId = detail.matchId ?: return
         val selectedServer = uiState.value.selectedServerPlayerId
         if (!detail.canStartMatch) {
-            feedbackMessage.value = "Participants are not fully resolved yet."
+            feedbackMessage.value = UiFeedback("Participants are not fully resolved yet.")
             return
         }
         if (selectedServer == null) {
-            feedbackMessage.value = "Select the initial server before starting."
+            feedbackMessage.value = UiFeedback("Select the initial server before starting.")
             return
         }
 
@@ -146,11 +151,11 @@ class CourtDetailViewModel @Inject constructor(
                 initialServerPlayerId = selectedServer,
             )
             feedbackMessage.value = when (result) {
-                StartMatchResult.Success -> "Match started"
-                StartMatchResult.MatchNotFound -> "Match not found"
-                StartMatchResult.MissingResolvedParticipants -> "Participants are not resolved"
-                StartMatchResult.InvalidInitialServer -> "Selected server is invalid"
-                StartMatchResult.InvalidMatchState -> "Only scheduled matches can be started"
+                StartMatchResult.Success -> UiFeedback("Match started")
+                StartMatchResult.MatchNotFound -> UiFeedback("Match not found")
+                StartMatchResult.MissingResolvedParticipants -> UiFeedback("Participants are not resolved")
+                StartMatchResult.InvalidInitialServer -> UiFeedback("Selected server is invalid")
+                StartMatchResult.InvalidMatchState -> UiFeedback("Only scheduled matches can be started")
             }
         }
     }
@@ -195,7 +200,10 @@ class CourtDetailViewModel @Inject constructor(
                 category = category,
                 violationName = violationName,
             )
-            feedbackMessage.value = "${result.summary}. This offence #${result.guidance.offenceNumber} -> ${result.guidance.appliedPenalty}. Next -> ${result.guidance.nextPenalty}"
+            feedbackMessage.value = UiFeedback(
+                message = "${result.summary}. This offence #${result.guidance.offenceNumber} -> ${result.guidance.appliedPenalty}. Next -> ${result.guidance.nextPenalty}",
+                actionLabel = "Undo",
+            )
         }
     }
 
@@ -203,13 +211,16 @@ class CourtDetailViewModel @Inject constructor(
         val matchId = uiState.value.detail?.matchId ?: return
         viewModelScope.launch {
             val undone = matchRepository.undoLastViolation(matchId)
-            feedbackMessage.value = if (undone) "Last violation undone" else "No violation to undo"
+            feedbackMessage.value = UiFeedback(
+                message = if (undone) "Last violation undone" else "No violation to undo",
+            )
         }
     }
 
-    fun onSubmitFinalScore(winnerSide: MatchWinnerSide, resultType: MatchResultType, scoreText: String) {
+    fun onSubmitFinalScore(winnerSide: MatchWinnerSide, scoreText: String) {
         val matchId = uiState.value.detail?.matchId ?: return
         viewModelScope.launch {
+            val resultType = inferResultType(scoreText)
             val result = matchRepository.endMatch(
                 matchId = matchId,
                 winnerSide = winnerSide,
@@ -217,10 +228,10 @@ class CourtDetailViewModel @Inject constructor(
                 scoreText = scoreText,
             )
             feedbackMessage.value = when (result) {
-                EndMatchResult.Success -> "Final score submitted"
-                EndMatchResult.MatchNotFound -> "Match not found"
-                EndMatchResult.InvalidMatchState -> "Match must be in progress"
-                EndMatchResult.MissingResolvedParticipants -> "Unable to determine winner teams"
+                EndMatchResult.Success -> UiFeedback("Final score submitted")
+                EndMatchResult.MatchNotFound -> UiFeedback("Match not found")
+                EndMatchResult.InvalidMatchState -> UiFeedback("Match must be in progress")
+                EndMatchResult.MissingResolvedParticipants -> UiFeedback("Unable to determine winner teams")
             }
         }
     }
@@ -229,11 +240,11 @@ class CourtDetailViewModel @Inject constructor(
         val matchId = uiState.value.detail?.matchId ?: return
         viewModelScope.launch {
             val moved = matchRepository.moveMatchToCourt(matchId, courtId)
-            feedbackMessage.value = if (moved) {
+            feedbackMessage.value = UiFeedback(if (moved) {
                 if (courtId == null) "Match moved to unassigned" else "Match moved to new court"
             } else {
                 "Failed to move match"
-            }
+            })
         }
     }
 
@@ -242,12 +253,57 @@ class CourtDetailViewModel @Inject constructor(
         if (otherCourtId == currentCourtId) return
         viewModelScope.launch {
             val swapped = matchRepository.swapCourtMatches(currentCourtId, otherCourtId)
-            feedbackMessage.value = if (swapped) "Court matches swapped" else "No matches to swap"
+            feedbackMessage.value = UiFeedback(if (swapped) "Court matches swapped" else "No matches to swap")
         }
     }
 
     fun clearFeedback() {
         feedbackMessage.value = null
+    }
+
+    private fun inferResultType(scoreText: String): MatchResultType {
+        val normalized = scoreText.trim()
+        if (normalized.isBlank()) {
+            return MatchResultType.WALKOVER
+        }
+
+        val lowered = normalized.lowercase()
+        if (lowered == "wo" || lowered == "w/o" || lowered == "walkover") {
+            return MatchResultType.WALKOVER
+        }
+
+        val setScores = normalized
+            .split(Regex("\\s+"))
+            .map { token -> token.substringBefore("(").trim() }
+            .mapNotNull { token ->
+                val match = SET_SCORE_REGEX.matchEntire(token) ?: return@mapNotNull null
+                val left = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                val right = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                left to right
+            }
+
+        if (setScores.isEmpty()) {
+            return MatchResultType.RETIREMENT
+        }
+
+        return if (setScores.all { (left, right) -> isCompleteSet(left, right) }) {
+            MatchResultType.NORMAL
+        } else {
+            MatchResultType.RETIREMENT
+        }
+    }
+
+    private fun isCompleteSet(leftGames: Int, rightGames: Int): Boolean {
+        if (leftGames < 0 || rightGames < 0) return false
+        val high = maxOf(leftGames, rightGames)
+        val low = minOf(leftGames, rightGames)
+        if (high >= 10) {
+            return high - low >= 2
+        }
+        if (high == 7 && (low == 5 || low == 6)) {
+            return true
+        }
+        return high >= 6 && high - low >= 2
     }
 
     private fun countViolations(events: List<MatchEvent>): Map<Long, ViolationCounts> {
@@ -271,5 +327,9 @@ class CourtDetailViewModel @Inject constructor(
         if (!message.startsWith("VIOLATION|")) return null
         val category = message.split("|").getOrNull(1) ?: return null
         return runCatching { ViolationCategory.valueOf(category) }.getOrNull()
+    }
+
+    private companion object {
+        val SET_SCORE_REGEX = Regex("(\\d+)\\s*[:-]\\s*(\\d+)")
     }
 }
