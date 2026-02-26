@@ -4,12 +4,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
@@ -31,10 +35,12 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -51,12 +57,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -80,6 +87,7 @@ import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
+import kotlinx.coroutines.delay
 
 private data class ViolationTemplate(
     val name: String,
@@ -176,8 +184,11 @@ private fun CourtDetailScreen(
             TopAppBar(
                 title = { Text(text = detail?.courtName ?: "Court") },
                 navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text(text = "Back")
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = "Back",
+                        )
                     }
                 },
             )
@@ -285,6 +296,7 @@ private fun CourtDetailScreen(
 
 @Composable
 private fun MatchHeader(detail: CourtDetail) {
+    val nowMillis = rememberTickerNowMillis()
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -305,6 +317,17 @@ private fun MatchHeader(detail: CourtDetail) {
         if (detail.status == CourtStatus.SCHEDULED) {
             detail.computedNotBeforeMillis?.let { notBefore ->
                 Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        if (detail.status == CourtStatus.IN_PROGRESS) {
+            detail.startedAtMillis?.let { startedAt ->
+                val elapsedMillis = (nowMillis - startedAt).coerceAtLeast(0L)
+                Text(
+                    text = "Elapsed: ${formatDuration(elapsedMillis)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
 
@@ -351,14 +374,15 @@ private fun SidePanels(
 ) {
     Row(
         modifier = Modifier
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .height(236.dp),
+                .fillMaxHeight(),
             side = detail.leftSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -375,7 +399,7 @@ private fun SidePanels(
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .height(236.dp),
+                .fillMaxHeight(),
             side = detail.rightSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -492,6 +516,8 @@ private fun ViolationDialog(
         addAll(detail.rightSide?.players.orEmpty())
     }
     var selectedPlayerId by remember { mutableStateOf(players.firstOrNull()?.playerId) }
+    var pendingViolation by remember { mutableStateOf<ViolationTemplate?>(null) }
+    val selectedPlayer = players.firstOrNull { it.playerId == selectedPlayerId }
     val selectedCounts = countsByPlayer[selectedPlayerId] ?: ViolationCounts()
     val playersWithViolations = players.mapNotNull { player ->
         val counts = countsByPlayer[player.playerId] ?: return@mapNotNull null
@@ -538,33 +564,12 @@ private fun ViolationDialog(
 
                 Text("Apply", style = MaterialTheme.typography.titleSmall)
                 commonViolations.forEach { violation ->
-                    val count = categoryCount(selectedCounts, violation.category)
-                    val offenceNumber = count + 1
-                    val appliedPenalty = penaltyForOffence(offenceNumber)
-                    val nextPenalty = penaltyForOffence(offenceNumber + 1)
-
-                    Card {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(violation.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text(
-                                "This offence #$offenceNumber: $appliedPenalty. Next: $nextPenalty.",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            TextButton(
-                                onClick = {
-                                    val offender = selectedPlayerId ?: return@TextButton
-                                    onApplyViolation(offender, violation.category, violation.name)
-                                    onDismiss()
-                                },
-                            ) {
-                                Text("Apply to selected player")
-                            }
-                        }
+                    OutlinedButton(
+                        onClick = { pendingViolation = violation },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = selectedPlayer != null,
+                    ) {
+                        Text(violation.name)
                     }
                 }
             }
@@ -573,6 +578,51 @@ private fun ViolationDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+
+    val violation = pendingViolation
+    if (violation != null && selectedPlayer != null) {
+        val currentCount = categoryCount(selectedCounts, violation.category)
+        val offenceNumber = currentCount + 1
+        val appliedPenalty = penaltyForOffence(offenceNumber)
+        val nextPenalty = penaltyForOffence(offenceNumber + 1)
+        AlertDialog(
+            onDismissRequest = { pendingViolation = null },
+            title = { Text("Confirm Violation") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "${violation.name} for ${displayPlayerLabel(selectedPlayer)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "This offence #$offenceNumber: $appliedPenalty",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Next offence: $nextPenalty",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onApplyViolation(selectedPlayer.playerId, violation.category, violation.name)
+                        pendingViolation = null
+                        onDismiss()
+                    },
+                ) {
+                    Text("Apply")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingViolation = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -678,9 +728,14 @@ private fun ParticipantSideCard(
     onSelectServer: (Long) -> Unit,
     isWinner: Boolean,
 ) {
-    val borderColor = if (isWinner) MaterialTheme.colorScheme.tertiary else Color.Transparent
     Card(
-        modifier = modifier.background(borderColor, RoundedCornerShape(12.dp)),
+        modifier = modifier,
+        border = if (isWinner) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.tertiary)
+        } else {
+            null
+        },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(
             modifier = Modifier
@@ -709,9 +764,10 @@ private fun ParticipantSideCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(backgroundColor, MaterialTheme.shapes.small)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(backgroundColor)
                             .clickable(enabled = canSelectServer, onClick = { onSelectServer(player.playerId) })
-                            .heightIn(min = 92.dp)
+                            .heightIn(min = 84.dp)
                             .padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -734,7 +790,7 @@ private fun ParticipantSideCard(
                             if (flag != null) {
                                 Text(
                                     text = flag,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontSize = 24.sp,
                                 )
                             }
                         }
@@ -892,8 +948,8 @@ private fun AutoSizingNameLine(
                 textMeasurer = textMeasurer,
                 baseStyle = baseStyle,
                 fontWeight = if (isEmphasized) FontWeight.ExtraBold else FontWeight.SemiBold,
-                max = 28.sp,
-                min = 11.sp,
+                max = 30.sp,
+                min = 7.sp,
             )
         }
         Text(
@@ -977,6 +1033,16 @@ private fun formatDuration(durationMillis: Long): String {
     val hours = totalMinutes / 60L
     val minutes = totalMinutes % 60L
     return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
+}
+
+@Composable
+private fun rememberTickerNowMillis(intervalMillis: Long = 1_000L): Long {
+    return produceState(initialValue = System.currentTimeMillis(), intervalMillis) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(intervalMillis)
+        }
+    }.value
 }
 
 private fun timerButtonLabel(timerState: CourtTimerState?): String {
