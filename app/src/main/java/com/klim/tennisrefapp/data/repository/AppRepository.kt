@@ -632,6 +632,9 @@ class AppRepository @Inject constructor(
                         courtId = match.courtId,
                         courtName = match.courtId?.let { courtsById[it]?.name ?: "Court $it" },
                         matchLabel = formatMatchLabel(match, context),
+                        winnerLabel = match.winnerTeamId?.let { winnerTeamId ->
+                            labelForTeam(winnerTeamId, context)
+                        },
                         scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
                         startedAtMillis = match.startedAt,
                         endedAtMillis = match.endedAt,

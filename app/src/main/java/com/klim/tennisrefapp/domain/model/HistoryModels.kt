@@ -5,6 +5,7 @@ data class CompletedCourtMatch(
     val courtId: Long?,
     val courtName: String?,
     val matchLabel: String,
+    val winnerLabel: String?,
     val scoreLabel: String?,
     val startedAtMillis: Long?,
     val endedAtMillis: Long?,

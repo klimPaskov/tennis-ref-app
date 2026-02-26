@@ -12,17 +12,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,7 +60,12 @@ private fun HistoryScreen(
             TopAppBar(
                 title = { Text("History") },
                 navigationIcon = {
-                    TextButton(onClick = onBack) { Text("Back") }
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = "Back",
+                        )
+                    }
                 },
             )
         },
@@ -91,14 +102,37 @@ private fun HistoryScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { duration ->
-                                Text(duration, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            match.winnerLabel?.let { winner ->
+                                Text(
+                                    text = buildAnnotatedString {
+                                        append("Winner: ")
+                                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                            append(winner)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { minutes ->
+                                Text(
+                                    text = buildAnnotatedString {
+                                        append("Duration: ")
+                                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                            append(minutes)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                             }
                             match.endedAtMillis?.let { endedAt ->
                                 Text(
-                                    text = "Ended: ${formatDateTime(endedAt)}",
+                                    text = buildAnnotatedString {
+                                        append("Ended: ")
+                                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                            append(formatDateTime(endedAt))
+                                        }
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
                                 )
                             }
                         }
@@ -118,5 +152,5 @@ private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): St
     val started = startedAtMillis ?: return null
     val ended = endedAtMillis ?: return null
     val minutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
-    return "Duration ${minutes}m"
+    return "${minutes}m"
 }
