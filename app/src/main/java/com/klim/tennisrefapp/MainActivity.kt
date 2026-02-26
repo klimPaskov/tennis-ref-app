@@ -1,6 +1,7 @@
 package com.klim.tennisrefapp
 
 import android.Manifest
+import android.app.AlarmManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
                     prompt = notificationPrompt,
                     onRequest = { launchNotificationPermissionRequest() },
                     onOpenSettings = { openAppNotificationSettings() },
+                    onOpenExactAlarmSettings = { openExactAlarmSettings() },
                     onDismiss = { notificationPrompt = NotificationPrompt.NONE },
                 )
             }
@@ -64,6 +66,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (!isNotificationGranted()) {
             notificationPrompt = nextNotificationPrompt()
+        } else if (needsExactAlarmPermissionPrompt()) {
+            notificationPrompt = NotificationPrompt.EXACT_ALARM
         } else {
             notificationPrompt = NotificationPrompt.NONE
         }
@@ -73,6 +77,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             if (!isNotificationGranted()) {
                 notificationPrompt = NotificationPrompt.SETTINGS
+            } else if (needsExactAlarmPermissionPrompt()) {
+                notificationPrompt = NotificationPrompt.EXACT_ALARM
             }
             return
         }
@@ -140,6 +146,31 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun openExactAlarmSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            val opened = runCatching {
+                startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (opened) return
+        }
+        startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null),
+            ),
+        )
+    }
+
+    private fun needsExactAlarmPermissionPrompt(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val alarmManager = getSystemService(AlarmManager::class.java) ?: return false
+        return !alarmManager.canScheduleExactAlarms()
+    }
+
     private fun extractCourtId(intent: Intent?): Long? {
         val source = intent ?: return null
         val courtId = source.getLongExtra(EXTRA_OPEN_COURT_ID, -1L)
@@ -158,6 +189,7 @@ private enum class NotificationPrompt {
     NONE,
     REQUEST,
     SETTINGS,
+    EXACT_ALARM,
 }
 
 @androidx.compose.runtime.Composable
@@ -165,6 +197,7 @@ private fun NotificationPermissionDialog(
     prompt: NotificationPrompt,
     onRequest: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenExactAlarmSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (prompt) {
@@ -193,6 +226,23 @@ private fun NotificationPermissionDialog(
                 text = { Text("Timer alerts are off. Open app notification settings to enable alerts and vibration.") },
                 confirmButton = {
                     Button(onClick = onOpenSettings) {
+                        Text("Open Settings")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("Later")
+                    }
+                },
+            )
+        }
+        NotificationPrompt.EXACT_ALARM -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("Allow Exact Alarms") },
+                text = { Text("Enable exact alarms so court timer notifications and vibration trigger on time.") },
+                confirmButton = {
+                    Button(onClick = onOpenExactAlarmSettings) {
                         Text("Open Settings")
                     }
                 },
