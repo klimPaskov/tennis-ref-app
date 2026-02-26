@@ -54,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -310,8 +309,10 @@ private fun MatchHeader(detail: CourtDetail) {
             )
         }
 
-        detail.computedNotBeforeMillis?.let { notBefore ->
-            Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
+        if (detail.status == CourtStatus.SCHEDULED) {
+            detail.computedNotBeforeMillis?.let { notBefore ->
+                Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
+            }
         }
 
         val scoreLabel = buildScoreLabel(detail.scoreText, detail.resultType)
@@ -770,17 +771,11 @@ private fun ParticipantSideCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         val flag = countryCodeToFlagEmoji(player.countryCode)
-                        if (flag != null) {
-                            Text(
-                                text = flag,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                        }
                         val (firstLine, secondLine) = splitNameIntoTwoLines(player.name)
                         val maxLineLength = maxOf(firstLine.length, secondLine?.length ?: 0)
                         val style = when {
-                            maxLineLength >= 20 -> MaterialTheme.typography.titleSmall
+                            maxLineLength >= 30 -> MaterialTheme.typography.bodySmall
+                            maxLineLength >= 20 -> MaterialTheme.typography.labelLarge
                             maxLineLength >= 14 -> MaterialTheme.typography.titleMedium
                             else -> MaterialTheme.typography.titleLarge
                         }
@@ -792,8 +787,6 @@ private fun ParticipantSideCard(
                                 text = firstLine,
                                 style = style,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,
                             )
                             if (!secondLine.isNullOrBlank()) {
@@ -801,9 +794,13 @@ private fun ParticipantSideCard(
                                     text = secondLine,
                                     style = style,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                     textAlign = TextAlign.Center,
+                                )
+                            }
+                            if (flag != null) {
+                                Text(
+                                    text = flag,
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
                             }
                         }
