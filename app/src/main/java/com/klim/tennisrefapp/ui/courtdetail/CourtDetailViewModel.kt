@@ -325,8 +325,12 @@ class CourtDetailViewModel @Inject constructor(
             return MatchResultType.WALKOVER
         }
 
-        val setScores = normalized
+        val tokens = normalized
             .split(Regex("\\s+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val setScores = tokens
             .map { token -> token.substringBefore("(").trim() }
             .mapNotNull { token ->
                 val match = SET_SCORE_REGEX.matchEntire(token) ?: return@mapNotNull null
@@ -334,6 +338,10 @@ class CourtDetailViewModel @Inject constructor(
                 val right = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
                 left to right
             }
+
+        if (setScores.size != tokens.size) {
+            return MatchResultType.RETIREMENT
+        }
 
         if (setScores.isEmpty()) {
             return MatchResultType.RETIREMENT

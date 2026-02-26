@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Schedule
@@ -53,9 +54,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.klim.tennisrefapp.data.timer.CourtTimerState
@@ -292,11 +294,21 @@ private fun CourtDetailScreen(
 @Composable
 private fun MatchHeader(detail: CourtDetail) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = statusLabel(detail.status),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(statusColor(detail.status), RoundedCornerShape(5.dp)),
+            )
+            Text(
+                text = statusLabel(detail.status),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
 
         detail.computedNotBeforeMillis?.let { notBefore ->
             Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
@@ -579,7 +591,19 @@ private fun FinalScoreDialog(
     onSubmit: (MatchWinnerSide, String) -> Unit,
 ) {
     var winner by remember { mutableStateOf<MatchWinnerSide?>(null) }
-    var scoreText by remember { mutableStateOf("") }
+    var set1Left by remember { mutableStateOf("") }
+    var set1Right by remember { mutableStateOf("") }
+    var set2Left by remember { mutableStateOf("") }
+    var set2Right by remember { mutableStateOf("") }
+    var set3Left by remember { mutableStateOf("") }
+    var set3Right by remember { mutableStateOf("") }
+    val scoreText = buildScoreFromSetFields(
+        listOf(
+            set1Left to set1Right,
+            set2Left to set2Right,
+            set3Left to set3Right,
+        ),
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -612,20 +636,33 @@ private fun FinalScoreDialog(
                     }
                 }
 
-                TextField(
-                    value = scoreText,
-                    onValueChange = { scoreText = it },
-                    label = { Text("Score (optional)") },
-                    placeholder = { Text("6-4 6-3") },
-                    modifier = Modifier.fillMaxWidth(),
+                Text("Score", style = MaterialTheme.typography.titleSmall)
+                ScoreSetRow(
+                    label = "Set 1",
+                    left = set1Left,
+                    right = set1Right,
+                    onLeftChange = { set1Left = sanitizeScoreCell(it) },
+                    onRightChange = { set1Right = sanitizeScoreCell(it) },
                 )
-                Text(
-                    "Leave empty for walkover. Incomplete score (example: 4:3) becomes retirement automatically.",
-                    style = MaterialTheme.typography.bodySmall,
+                ScoreSetRow(
+                    label = "Set 2",
+                    left = set2Left,
+                    right = set2Right,
+                    onLeftChange = { set2Left = sanitizeScoreCell(it) },
+                    onRightChange = { set2Right = sanitizeScoreCell(it) },
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { scoreText = "6-4 6-3" }, modifier = Modifier.weight(1f)) { Text("6-4 6-3") }
-                    TextButton(onClick = { scoreText = "6-4 3-6 10-7" }, modifier = Modifier.weight(1f)) { Text("6-4 3-6 10-7") }
+                ScoreSetRow(
+                    label = "Set 3",
+                    left = set3Left,
+                    right = set3Right,
+                    onLeftChange = { set3Left = sanitizeScoreCell(it) },
+                    onRightChange = { set3Right = sanitizeScoreCell(it) },
+                )
+                if (scoreText.isNotBlank()) {
+                    Text(
+                        text = "Recorded as: $scoreText",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         },
@@ -732,19 +769,44 @@ private fun ParticipantSideCard(
                             .padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = displayPlayerLabel(player),
-                            style = if (player.name.length > 24) {
-                                MaterialTheme.typography.titleMedium
-                            } else {
-                                MaterialTheme.typography.titleLarge
-                            },
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = 24.sp,
-                            modifier = Modifier.fillMaxWidth(),
-                            maxLines = 2,
-                            textAlign = TextAlign.Center,
-                        )
+                        val flag = countryCodeToFlagEmoji(player.countryCode)
+                        if (flag != null) {
+                            Text(
+                                text = flag,
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                        }
+                        val (firstLine, secondLine) = splitNameIntoTwoLines(player.name)
+                        val maxLineLength = maxOf(firstLine.length, secondLine?.length ?: 0)
+                        val style = when {
+                            maxLineLength >= 20 -> MaterialTheme.typography.titleSmall
+                            maxLineLength >= 14 -> MaterialTheme.typography.titleMedium
+                            else -> MaterialTheme.typography.titleLarge
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = firstLine,
+                                style = style,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                            )
+                            if (!secondLine.isNullOrBlank()) {
+                                Text(
+                                    text = secondLine,
+                                    style = style,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -759,6 +821,42 @@ private fun ParticipantSideCard(
     }
 }
 
+@Composable
+private fun ScoreSetRow(
+    label: String,
+    left: String,
+    right: String,
+    onLeftChange: (String) -> Unit,
+    onRightChange: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        TextField(
+            value = left,
+            onValueChange = onLeftChange,
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+        Text(":")
+        TextField(
+            value = right,
+            onValueChange = onRightChange,
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+    }
+}
+
 private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
     val score = scoreText?.trim().orEmpty()
     return when (resultType) {
@@ -767,6 +865,24 @@ private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
         "DEFAULT" -> if (score.isBlank()) "DEF" else "$score DEF"
         else -> score.ifBlank { null }
     }
+}
+
+private fun sanitizeScoreCell(raw: String): String {
+    return raw.filter { it.isDigit() }.take(2)
+}
+
+private fun buildScoreFromSetFields(sets: List<Pair<String, String>>): String {
+    return sets
+        .mapNotNull { (left, right) ->
+            val leftValue = left.trim()
+            val rightValue = right.trim()
+            if (leftValue.isBlank() && rightValue.isBlank()) {
+                null
+            } else {
+                "$leftValue:$rightValue"
+            }
+        }
+        .joinToString(" ")
 }
 
 private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {
@@ -833,9 +949,14 @@ private fun penaltyForOffence(offenceNumber: Int): String {
 
 private fun displayPlayerLabel(player: PlayerRef): String {
     val flag = countryCodeToFlagEmoji(player.countryCode)
-    val parts = player.name.trim().split(Regex("\\s+"), limit = 2)
-    val name = if (parts.size == 2) "${parts[0]}\n${parts[1]}" else player.name
-    return if (flag != null) "$flag $name" else name
+    return if (flag != null) "$flag ${player.name}" else player.name
+}
+
+private fun splitNameIntoTwoLines(name: String): Pair<String, String?> {
+    val parts = name.trim().split(Regex("\\s+"))
+    if (parts.isEmpty()) return name to null
+    if (parts.size == 1) return parts.first() to null
+    return parts.first() to parts.drop(1).joinToString(" ")
 }
 
 private fun countryCodeToFlagEmoji(countryCode: String?): String? {
@@ -882,6 +1003,14 @@ private fun statusLabel(status: CourtStatus): String {
         CourtStatus.IN_PROGRESS -> "In Progress"
         CourtStatus.COMPLETED -> "Completed"
     }
+}
+
+@Composable
+private fun statusColor(status: CourtStatus) = when (status) {
+    CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
+    CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.secondary
+    CourtStatus.IN_PROGRESS -> MaterialTheme.colorScheme.tertiary
+    CourtStatus.COMPLETED -> MaterialTheme.colorScheme.primary
 }
 
 private fun formatTime(timestamp: Long): String {
