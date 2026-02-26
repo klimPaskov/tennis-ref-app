@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 
 data class CourtListItemUi(
     val court: CourtCard,
-    val warmupState: CourtTimerState? = null,
+    val activeTimerState: CourtTimerState? = null,
 )
 
 data class CourtsUiState(
@@ -41,12 +41,12 @@ class CourtsViewModel @Inject constructor(
         timerManager.observeAllTimers(),
     ) { courts, timers ->
         val rows = courts.map { court ->
-            val warmup = timers[court.courtId]
-                ?.takeIf { it.timerType == CourtTimerType.WARMUP && it.isRunning }
-            CourtListItemUi(court = court, warmupState = warmup)
+            val activeTimer = timers[court.courtId]
+                ?.takeIf { it.isRunning }
+            CourtListItemUi(court = court, activeTimerState = activeTimer)
         }.sortedWith(
             compareBy<CourtListItemUi>(
-                { if (it.warmupState != null) 0 else 1 },
+                { timerSortRank(it.activeTimerState?.timerType) },
                 { statusSortRank(it.court.status) },
                 { it.court.computedNotBeforeMillis ?: Long.MAX_VALUE },
                 { it.court.courtName },
@@ -93,6 +93,14 @@ class CourtsViewModel @Inject constructor(
             CourtStatus.SCHEDULED -> 2
             CourtStatus.COMPLETED -> 3
             CourtStatus.EMPTY -> 4
+        }
+    }
+
+    private fun timerSortRank(timerType: CourtTimerType?): Int {
+        return when (timerType) {
+            CourtTimerType.WARMUP -> 0
+            null -> 2
+            else -> 1
         }
     }
 }

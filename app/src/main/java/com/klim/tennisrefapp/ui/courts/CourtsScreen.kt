@@ -14,8 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -30,6 +34,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
 
@@ -44,7 +49,7 @@ fun CourtsRoute(
     CourtsScreen(
         courts = uiState.courts,
         onCourtClick = onCourtClick,
-        onBack = onBack,
+        onHome = onBack,
         onOpenHistory = onOpenHistory,
     )
 }
@@ -54,7 +59,7 @@ fun CourtsRoute(
 private fun CourtsScreen(
     courts: List<CourtListItemUi>,
     onCourtClick: (Long) -> Unit,
-    onBack: () -> Unit,
+    onHome: () -> Unit,
     onOpenHistory: () -> Unit,
 ) {
     Scaffold(
@@ -62,7 +67,9 @@ private fun CourtsScreen(
             TopAppBar(
                 title = { Text(text = "Courts") },
                 navigationIcon = {
-                    TextButton(onClick = onBack) { Text("Back") }
+                    IconButton(onClick = onHome) {
+                        Icon(Icons.Outlined.Home, contentDescription = "Home")
+                    }
                 },
                 actions = {
                     TextButton(onClick = onOpenHistory) { Text("History") }
@@ -93,14 +100,14 @@ private fun CourtCardItem(
     onTap: () -> Unit,
 ) {
     val court = row.court
-    val warmupState = row.warmupState
-    val isWarmup = warmupState != null
+    val timerState = row.activeTimerState
+    val timerType = timerState?.timerType
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onTap),
-        border = BorderStroke(2.dp, statusColor(court.status, isWarmup)),
+        border = BorderStroke(2.dp, statusColor(court.status, timerType)),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -118,13 +125,14 @@ private fun CourtCardItem(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = if (isWarmup) "Warming Up" else statusLabel(court.status),
+                    text = if (timerType != null) timerLabel(timerType) else statusLabel(court.status),
                     style = MaterialTheme.typography.labelMedium,
-                    color = statusColor(court.status, isWarmup),
+                    color = statusColor(court.status, timerType),
+                    fontWeight = FontWeight.SemiBold,
                 )
-                if (isWarmup) {
+                if (timerState != null) {
                     Text(
-                        text = formatRemaining(warmupState?.remainingMillis ?: 0L),
+                        text = formatRemaining(timerState.remainingMillis),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -141,6 +149,13 @@ private fun CourtCardItem(
     }
 }
 
+private fun timerLabel(timerType: CourtTimerType): String {
+    return when (timerType) {
+        CourtTimerType.WARMUP -> "Warm-up"
+        else -> timerType.label
+    }
+}
+
 private fun statusLabel(status: CourtStatus): String {
     return when (status) {
         CourtStatus.EMPTY -> "Empty"
@@ -150,11 +165,12 @@ private fun statusLabel(status: CourtStatus): String {
     }
 }
 
-private fun statusColor(status: CourtStatus, isWarmup: Boolean = false): Color {
-    if (isWarmup) return Color(0xFF8E24AA)
+private fun statusColor(status: CourtStatus, timerType: CourtTimerType? = null): Color {
+    if (timerType == CourtTimerType.WARMUP) return Color(0xFFE91E63)
+    if (timerType != null) return Color(0xFFE53935)
     return when (status) {
         CourtStatus.EMPTY -> Color(0xFF9E9E9E)
-        CourtStatus.SCHEDULED -> Color(0xFF8E24AA)
+        CourtStatus.SCHEDULED -> Color(0xFFE91E63)
         CourtStatus.IN_PROGRESS -> Color(0xFFF57C00)
         CourtStatus.COMPLETED -> Color(0xFF2E7D32)
     }
