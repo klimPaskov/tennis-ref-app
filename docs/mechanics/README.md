@@ -12,3 +12,5 @@ This folder documents each MVP mechanic implemented in the app.
 - `workmanager-reminder-foundation.md`
 - `timer-violations-score-and-court-actions.md`
 - `nationality-flags.md`
+- `home-history-and-player-insights.md`
+- `persistent-court-timer-alerts.md`

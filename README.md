@@ -4,11 +4,13 @@ Tennis Referee App is an Android app for on-court tournament refereeing.
 It is designed for fast, low-friction match control: view courts, open a court, confirm first server, and start matches with clear state tracking.
 
 ## What This App Does
+- Starts from a Home screen to continue or reload the order of play.
 - Shows all courts with current match and status.
 - Supports unresolved draw slots (`Winner of Match X`, `TBD`, `BYE`).
 - Lets a referee set sides, choose initial server, and start a match.
 - Tracks match timeline data (`startedAt`, `endedAt`) and event history.
 - Computes “not before” time using rest constraints and optional manual limits.
+- Shows a History view (completed matches by court) and per-player match insights.
 
 ## Quick Start
 ### Prerequisites
@@ -66,6 +68,11 @@ For doubles, both players constrain availability. For unresolved slots, only kno
   - off-court allowance
   - medical timeout
   - equipment fix
+- Timer completion can alert by vibration + notification, including when the app is in background.
+
+## Court Controls
+- `Next` on a court card assigns the next unassigned scheduled match to that court.
+- `Swap` (between left/right player panels) swaps sides before match start.
 
 ## Project Docs
 - Contributor guide: `AGENTS.md`

@@ -29,5 +29,5 @@
 - Completed match header shows played duration from `startedAt` and `endedAt`.
 
 ## Court assignment actions
-- Court detail supports moving match to another court or unassigned.
-- Court detail supports swapping matches between courts.
+- Court cards provide a `Next` action to assign the next unassigned scheduled match to that court.
+- Side swap in court detail is available before match start to correct left/right orientation.
