@@ -76,7 +76,12 @@ For doubles, both players constrain availability. For unresolved slots, only kno
 
 ## Court Controls
 - `Swap` (between left/right player panels) swaps sides before match start.
-- New order-of-play action opens a file picker, then refreshes current loaded schedule.
+- New order-of-play action opens a file picker and imports courts/matches from the selected file.
+
+## Order Of Play Import
+- The app can import from selected files (`PDF` and plain text).
+- For ITF-style order-of-play sheets, player pairs are parsed from `vs.` rows and assigned across detected court columns.
+- If parsing fails, the app keeps current data and shows an error message.
 
 ## Project Docs
 - Contributor guide: `AGENTS.md`
