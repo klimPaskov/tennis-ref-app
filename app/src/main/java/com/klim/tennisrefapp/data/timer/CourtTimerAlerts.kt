@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.VibrationEffect
@@ -13,8 +15,9 @@ import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.klim.tennisrefapp.MainActivity
 
-internal const val COURT_TIMER_CHANNEL_ID = "court_timer_channel"
+internal const val COURT_TIMER_CHANNEL_ID = "court_timer_channel_v2"
 internal const val COURT_TIMER_CHANNEL_NAME = "Court Timer"
 private const val COURT_TIMER_NOTIFICATION_BASE_ID = 10000
 
@@ -65,15 +68,30 @@ internal object CourtTimerAlerts {
         } else {
             longArrayOf(0L, 220L)
         }
+        val openCourtIntent = Intent(context, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_OPEN_COURT
+            putExtra(MainActivity.EXTRA_OPEN_COURT_ID, courtId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openCourtPendingIntent = PendingIntent.getActivity(
+            context,
+            courtId.toInt(),
+            openCourtIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
         val notification = NotificationCompat.Builder(context, COURT_TIMER_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("Court timer ended")
-            .setContentText("$courtName • ${timerType.label}")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentTitle("$courtName timer finished")
+            .setContentText(timerType.label)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(pattern)
+            .setContentIntent(openCourtPendingIntent)
             .setAutoCancel(true)
             .build()
 

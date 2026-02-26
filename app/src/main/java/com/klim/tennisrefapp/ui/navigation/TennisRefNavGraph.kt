@@ -1,6 +1,7 @@
 package com.klim.tennisrefapp.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,8 +27,19 @@ private const val ARG_MATCH_ID = "matchId"
 private const val ARG_PLAYER_ID = "playerId"
 
 @Composable
-fun TennisRefNavGraph() {
+fun TennisRefNavGraph(
+    launchCourtId: Long? = null,
+    onLaunchCourtConsumed: () -> Unit = {},
+) {
     val navController = rememberNavController()
+    LaunchedEffect(launchCourtId) {
+        val courtId = launchCourtId ?: return@LaunchedEffect
+        if (courtId <= 0L) return@LaunchedEffect
+        navController.navigate("$COURT_DETAIL_ROUTE/$courtId") {
+            launchSingleTop = true
+        }
+        onLaunchCourtConsumed()
+    }
     NavHost(
         navController = navController,
         startDestination = HOME_ROUTE,
