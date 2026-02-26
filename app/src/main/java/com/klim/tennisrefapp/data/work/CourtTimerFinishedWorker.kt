@@ -25,6 +25,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val matchId = inputData.getLong(KEY_MATCH_ID, -1L)
         val courtName = inputData.getString(KEY_COURT_NAME).orEmpty()
         val timerTypeName = inputData.getString(KEY_TIMER_TYPE).orEmpty()
+        val skipAlert = inputData.getBoolean(KEY_SKIP_ALERT, false)
 
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) {
             return Result.success()
@@ -33,12 +34,14 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val timerType = runCatching { CourtTimerType.valueOf(timerTypeName) }.getOrNull()
             ?: return Result.success()
 
-        CourtTimerAlerts.notifyFinished(
-            context = applicationContext,
-            courtId = courtId,
-            courtName = courtName,
-            timerType = timerType,
-        )
+        if (!skipAlert) {
+            CourtTimerAlerts.notifyFinished(
+                context = applicationContext,
+                courtId = courtId,
+                courtName = courtName,
+                timerType = timerType,
+            )
+        }
         eventLogRepository.logEvent(
             matchId = matchId,
             courtId = courtId,
@@ -58,6 +61,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         const val KEY_MATCH_ID = "match_id"
         const val KEY_COURT_NAME = "court_name"
         const val KEY_TIMER_TYPE = "timer_type"
+        const val KEY_SKIP_ALERT = "skip_alert"
 
         fun workName(courtId: Long): String = "court_timer_finish_$courtId"
     }

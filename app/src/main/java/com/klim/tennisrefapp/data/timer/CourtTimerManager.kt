@@ -1,5 +1,9 @@
 package com.klim.tennisrefapp.data.timer
 
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.os.Build
 import android.content.Context
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -84,6 +88,7 @@ class CourtTimerManager @Inject constructor(
 
         CourtTimerPersistence.save(appContext, timer)
         scheduleFinishWorker(timer)
+        scheduleFinishAlarm(timer)
         logTimerEvent(courtId, matchId, timerType, "START")
         launchTicker(timer)
     }
@@ -92,6 +97,7 @@ class CourtTimerManager @Inject constructor(
         val current = state.value[courtId]
         timerJobs.remove(courtId)?.cancel()
         cancelFinishWorker(courtId)
+        cancelFinishAlarm(courtId)
         CourtTimerPersistence.remove(appContext, courtId)
         state.value = state.value.toMutableMap().also { map -> map.remove(courtId) }
         if (current != null && current.isRunning) {
@@ -162,8 +168,72 @@ class CourtTimerManager @Inject constructor(
         )
     }
 
+    private fun scheduleFinishAlarm(timer: PersistedCourtTimer) {
+        val triggerAtMillis = timer.endAtMillis.coerceAtLeast(System.currentTimeMillis())
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = timerAlarmPendingIntent(
+            courtId = timer.courtId,
+            matchId = timer.matchId,
+            courtName = timer.courtName,
+            timerType = timer.timerType,
+            updateCurrent = true,
+        ) ?: return
+        runCatching {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms() ->
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                else ->
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            }
+        }.getOrElse {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            } else {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            }
+        }
+    }
+
     private fun cancelFinishWorker(courtId: Long) {
         workManager.cancelUniqueWork(CourtTimerFinishedWorker.workName(courtId))
+    }
+
+    private fun cancelFinishAlarm(courtId: Long) {
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = timerAlarmPendingIntent(
+                courtId = courtId,
+                matchId = 0L,
+                courtName = "",
+                timerType = CourtTimerType.WARMUP,
+                updateCurrent = false,
+            ) ?: return
+        alarmManager.cancel(pendingIntent)
+    }
+
+    private fun timerAlarmPendingIntent(
+        courtId: Long,
+        matchId: Long,
+        courtName: String,
+        timerType: CourtTimerType,
+        updateCurrent: Boolean,
+    ): PendingIntent? {
+        val intent = Intent(appContext, CourtTimerAlarmReceiver::class.java).apply {
+            action = CourtTimerAlarmReceiver.ACTION_TIMER_FINISH
+            putExtra(CourtTimerAlarmReceiver.EXTRA_COURT_ID, courtId)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_MATCH_ID, matchId)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_COURT_NAME, courtName)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_TIMER_TYPE, timerType.name)
+        }
+        val flags = (if (updateCurrent) PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_NO_CREATE) or
+            PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(
+            appContext,
+            courtId.toInt(),
+            intent,
+            flags,
+        )
     }
 
     private fun restorePersistedTimers() {
@@ -171,6 +241,7 @@ class CourtTimerManager @Inject constructor(
         CourtTimerPersistence.loadAll(appContext).forEach { timer ->
             if (timer.endAtMillis <= now) {
                 scheduleFinishWorker(timer.copy(endAtMillis = now))
+                scheduleFinishAlarm(timer.copy(endAtMillis = now))
                 state.value = state.value.toMutableMap().also { map ->
                     map[timer.courtId] = CourtTimerState(
                         courtId = timer.courtId,
@@ -182,6 +253,7 @@ class CourtTimerManager @Inject constructor(
                     )
                 }
             } else {
+                scheduleFinishAlarm(timer)
                 launchTicker(timer)
             }
         }

@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isNotificationGranted()) {
+        if (!isNotificationGranted()) {
             notificationPrompt = nextNotificationPrompt()
         } else {
             notificationPrompt = NotificationPrompt.NONE
@@ -69,7 +70,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestNotificationsIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            if (!isNotificationGranted()) {
+                notificationPrompt = NotificationPrompt.SETTINGS
+            }
+            return
+        }
         if (isNotificationGranted()) return
         if (!wasNotificationPermissionRequested()) {
             launchNotificationPermissionRequest()
@@ -84,6 +90,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun nextNotificationPrompt(): NotificationPrompt {
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            return NotificationPrompt.SETTINGS
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return NotificationPrompt.NONE
         if (isNotificationGranted()) return NotificationPrompt.NONE
         return if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -94,6 +103,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isNotificationGranted(): Boolean {
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.POST_NOTIFICATIONS,
