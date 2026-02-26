@@ -1732,15 +1732,20 @@ class AppRepository @Inject constructor(
         val firstColumn = columns.firstOrNull() ?: return emptyList()
         val headerBottom = columns.maxOfOrNull { it.headerBottom } ?: 0f
         val maxBottom = lines.maxOfOrNull { it.bottom } ?: return emptyList()
+        val firstColumnWidth = (firstColumn.rightBoundary - firstColumn.leftBoundary).coerceAtLeast(1f)
+        val markerRightLimit = firstColumn.leftBoundary + (firstColumnWidth * 0.32f).coerceAtLeast(60f)
 
         val rowMarkers = lines
-            .filter { it.centerX < firstColumn.leftBoundary + 24f && it.top >= headerBottom }
+            .filter { line ->
+                line.top >= headerBottom &&
+                    line.left <= markerRightLimit
+            }
             .mapNotNull { line ->
                 parseRowNumber(line.text)?.let { line.centerY }
             }
             .sorted()
             .fold(mutableListOf<Float>()) { acc, y ->
-                if (acc.isEmpty() || abs(acc.last() - y) > 16f) acc += y
+                if (acc.isEmpty() || abs(acc.last() - y) > 14f) acc += y
                 acc
             }
 
@@ -1829,15 +1834,44 @@ class AppRepository @Inject constructor(
         }
 
         val fallbackEntrants = cellLines
-            .mapNotNull { line -> line.text.takeIf { isPotentialEntrantLine(it) }?.let(::parseEntrant) }
+            .mapNotNull { line ->
+                if (!isPotentialEntrantLine(line.text)) return@mapNotNull null
+                val entrant = parseEntrant(line.text) ?: return@mapNotNull null
+                ParsedEntrantLine(
+                    centerY = line.centerY,
+                    raw = line.text,
+                    entrant = entrant,
+                )
+            }
         if (fallbackEntrants.size >= 2) {
-            val left = fallbackEntrants[0]
-            val right = fallbackEntrants[1]
-            if (!left.name.equals(right.name, ignoreCase = true)) {
-                return sanitizeSeedConflict(left, right, left.name, right.name)
+            val selected = selectFallbackEntrants(fallbackEntrants) ?: return null
+            val left = selected.first
+            val right = selected.second
+            if (!left.entrant.name.equals(right.entrant.name, ignoreCase = true)) {
+                return sanitizeSeedConflict(left.entrant, right.entrant, left.raw, right.raw)
             }
         }
         return null
+    }
+
+    private fun selectFallbackEntrants(entries: List<ParsedEntrantLine>): Pair<ParsedEntrantLine, ParsedEntrantLine>? {
+        if (entries.size < 2) return null
+        if (entries.size == 2) return entries[0] to entries[1]
+
+        val sorted = entries.sortedBy { it.centerY }
+        var bestPair: Pair<ParsedEntrantLine, ParsedEntrantLine>? = null
+        var bestGap = Float.MAX_VALUE
+        for (index in 0 until sorted.lastIndex) {
+            val left = sorted[index]
+            val right = sorted[index + 1]
+            if (left.entrant.name.equals(right.entrant.name, ignoreCase = true)) continue
+            val gap = (right.centerY - left.centerY).coerceAtLeast(0f)
+            if (gap < bestGap) {
+                bestGap = gap
+                bestPair = left to right
+            }
+        }
+        return bestPair
     }
 
     private fun parseScheduleContextFromCell(cellLines: List<OcrLine>): ScheduleContext {
@@ -1871,7 +1905,14 @@ class AppRepository @Inject constructor(
 
     private fun parseRowNumber(raw: String): Int? {
         val token = raw.trim().removeSuffix(".")
-        return token.toIntOrNull()?.takeIf { it in 1..64 }
+        token.toIntOrNull()?.takeIf { it in 1..64 }?.let { return it }
+        val prefixed = Regex("^(\\d{1,2})\\b").find(raw.trim()) ?: return null
+        val value = prefixed.groupValues[1].toIntOrNull()?.takeIf { it in 1..64 } ?: return null
+        val tail = raw.trim().substring(prefixed.range.last + 1).trim()
+        if (tail.isEmpty()) return value
+        val normalizedTail = tail.trimStart('.', ')', '-', ':', ' ')
+        if (normalizedTail.isEmpty() || containsScheduleKeyword(normalizedTail)) return value
+        return null
     }
 
     private fun mergeEntrant(existing: ParsedEntrant?, incoming: ParsedEntrant): ParsedEntrant {
@@ -2323,17 +2364,23 @@ class AppRepository @Inject constructor(
             .replace(Regex("\\b\\d{1,2}:\\d{2}\\b"), " ")
             .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), "")
             .replace(Regex("(^|\\s)[\\d()\\-:]+($|\\s)"), " ")
+            .replace("(", " ")
+            .replace(")", " ")
             .replace(".", " ")
             .normalizeSpaces()
             .trim()
         if (cleaned.isBlank()) return null
         val tokens = cleaned
             .split(' ')
+            .map { token ->
+                token.trim().trim(',', ';', ':', '.', '(', ')', '[', ']', '{', '}', '|')
+            }
             .filter { token ->
                 token.isNotBlank() &&
                     token.any { it.isLetter() } &&
-                    !token.equals(matchedCountry, ignoreCase = true) &&
-                    !token.equals(ISO3_TO_ISO2[matchedCountry], ignoreCase = true)
+                    !token.any { it.isDigit() } &&
+                    !tokenMatchesCountry(token, matchedCountry) &&
+                    !isLikelySeedArtifactToken(token)
             }
         val normalizedTokens = cleanupNameTokens(tokens)
         if (normalizedTokens.isEmpty()) return null
@@ -2345,6 +2392,19 @@ class AppRepository @Inject constructor(
             countryCode = matchedCountry,
             seed = seed,
         )
+    }
+
+    private fun tokenMatchesCountry(token: String, countryCode: String?): Boolean {
+        val matched = countryCode ?: return false
+        val normalized = normalizeCountryCodeToken(token) ?: return false
+        return normalized == matched || normalized == ISO3_TO_ISO2[matched]
+    }
+
+    private fun isLikelySeedArtifactToken(token: String): Boolean {
+        if (token.isBlank()) return false
+        if (token.any { it.isDigit() }) return true
+        if (token.contains('[') || token.contains(']') || token.contains('|')) return true
+        return token.length <= 2 && token.all { it in "IiLlZzSsrR" }
     }
 
     private fun findScheduleContext(lines: List<String>, aroundIndex: Int): ScheduleContext {
@@ -2555,6 +2615,12 @@ class AppRepository @Inject constructor(
     private data class InlinePair(
         val leftRaw: String,
         val rightRaw: String,
+    )
+
+    private data class ParsedEntrantLine(
+        val centerY: Float,
+        val raw: String,
+        val entrant: ParsedEntrant,
     )
 
     private data class CourtPlacement(
