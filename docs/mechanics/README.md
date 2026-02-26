@@ -14,3 +14,4 @@ This folder documents each MVP mechanic implemented in the app.
 - `nationality-flags.md`
 - `home-history-and-player-insights.md`
 - `persistent-court-timer-alerts.md`
+- `rest-prompt-and-player-rest-updates.md`

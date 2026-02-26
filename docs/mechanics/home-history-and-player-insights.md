@@ -3,8 +3,8 @@
 ## Home Screen
 - Entry point of the app.
 - Actions:
-  - `Continue Order Of Play`: opens courts.
-  - `Load Order Of Play`: reloads seeded schedule from the sample order-of-play set.
+  - `Courts`: opens courts.
+  - `New Order Of Play`: reloads seeded schedule from the sample order-of-play set.
   - `Players`: opens player list.
   - `History`: opens completed-match history grouped by court.
 

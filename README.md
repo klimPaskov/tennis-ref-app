@@ -49,6 +49,7 @@ For each match, the app computes the earliest valid start as the maximum of:
 - each known player's `lastEndedAt + restMinutes`.
 
 For doubles, both players constrain availability. For unresolved slots, only known participants are considered until dependencies resolve.
+`restMinutes` can be updated per player and recalculates not-before times dynamically.
 
 ## Recording a Match Result
 - Pick the winner by player/team name.
@@ -57,10 +58,13 @@ For doubles, both players constrain availability. For unresolved slots, only kno
   - no score -> Walkover
   - incomplete score (for example `4:3`) -> Retirement
   - complete score -> Normal
+- If match duration is at least `60` minutes and a player has an upcoming match, the app prompts for requested rest minutes.
+- Rest can also be edited later from player detail.
 
 ## Match Timing
 - Warm-up starts automatically after the initial server is selected.
 - Match can start automatically when warm-up ends, or manually with `Start Match Now`.
+- Warming-up courts are pushed to the top of the courts list and show live warm-up remaining time.
 - In-progress timer menu includes referee timing presets:
   - side switch
   - set break

@@ -19,6 +19,7 @@ Keep referee timers reliable when navigating away from a court or when the app i
   - vibrates device,
   - logs `TIMER|<TYPE>|DONE` event,
   - clears persisted timer entry.
+- For `WARMUP`, worker also attempts automatic match start using the selected initial server.
 
 ## Recovery Behavior
 - On app process restart, active persisted timers are restored:
