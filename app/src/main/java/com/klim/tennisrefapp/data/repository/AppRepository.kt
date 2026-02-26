@@ -70,6 +70,7 @@ import com.klim.tennisrefapp.domain.usecase.ComputeNotBeforeUseCase
 import com.klim.tennisrefapp.domain.usecase.ResolveSlotUseCase
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -83,6 +84,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.ceil
 
 @Singleton
@@ -1523,7 +1525,12 @@ class AppRepository @Inject constructor(
 
     private suspend fun parseOrderOfPlayFromUri(uriString: String): ImportedOrderDocument? {
         val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
-        val text = readOrderOfPlayText(uri) ?: return null
+        val mimeType = appContext.contentResolver.getType(uri)?.lowercase().orEmpty()
+        if (isImageFile(uri, mimeType)) {
+            parseOrderOfPlayFromImage(uri)?.let { return it }
+        }
+
+        val text = readOrderOfPlayText(uri, mimeType) ?: return null
         val lines = text
             .replace('\u000C', '\n')
             .lineSequence()
@@ -1545,21 +1552,15 @@ class AppRepository @Inject constructor(
         )
     }
 
-    private suspend fun readOrderOfPlayText(uri: Uri): String? = withContext(Dispatchers.IO) {
+    private suspend fun readOrderOfPlayText(uri: Uri, mimeTypeHint: String? = null): String? = withContext(Dispatchers.IO) {
         val resolver = appContext.contentResolver
-        val mimeType = resolver.getType(uri)?.lowercase().orEmpty()
-        val isPdf = mimeType.contains("pdf") || uri.toString().lowercase().endsWith(".pdf")
-        val isImage = mimeType.startsWith("image/") ||
-            uri.toString().lowercase().endsWith(".png") ||
-            uri.toString().lowercase().endsWith(".jpg") ||
-            uri.toString().lowercase().endsWith(".jpeg") ||
-            uri.toString().lowercase().endsWith(".webp")
-        if (isImage) {
+        val mimeType = mimeTypeHint ?: resolver.getType(uri)?.lowercase().orEmpty()
+        if (isImageFile(uri, mimeType)) {
             return@withContext readOrderOfPlayTextFromImage(uri)
         }
         val input = resolver.openInputStream(uri) ?: return@withContext null
         input.use { stream ->
-            if (isPdf) {
+            if (isPdfFile(uri, mimeType)) {
                 PDFBoxResourceLoader.init(appContext)
                 PDDocument.load(stream).use { document ->
                     PDFTextStripper().getText(document)
@@ -1571,15 +1572,291 @@ class AppRepository @Inject constructor(
     }
 
     private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? = withContext(Dispatchers.IO) {
+        recognizeImageText(uri)?.text
+    }
+
+    private fun isPdfFile(uri: Uri, mimeType: String): Boolean {
+        return mimeType.contains("pdf") || uri.toString().lowercase().endsWith(".pdf")
+    }
+
+    private fun isImageFile(uri: Uri, mimeType: String): Boolean {
+        val lower = uri.toString().lowercase()
+        return mimeType.startsWith("image/") ||
+            lower.endsWith(".png") ||
+            lower.endsWith(".jpg") ||
+            lower.endsWith(".jpeg") ||
+            lower.endsWith(".webp")
+    }
+
+    private suspend fun recognizeImageText(uri: Uri): Text? = withContext(Dispatchers.IO) {
         runCatching {
             val image = InputImage.fromFilePath(appContext, uri)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             try {
-                Tasks.await(recognizer.process(image)).text
+                Tasks.await(recognizer.process(image))
             } finally {
                 recognizer.close()
             }
         }.getOrNull()
+    }
+
+    private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
+        val recognized = recognizeImageText(uri) ?: return null
+        val ocrLines = extractOcrLines(recognized)
+        if (ocrLines.isEmpty()) return null
+
+        val columns = detectCourtColumns(ocrLines)
+        if (columns.isEmpty()) return null
+        val rowBands = detectRowBands(ocrLines, columns)
+        if (rowBands.isEmpty()) return null
+
+        val matches = mutableListOf<ImportedOrderMatch>()
+        rowBands.sortedBy { it.order }.forEach { row ->
+            columns.forEach columnLoop@ { column ->
+                val cellLines = ocrLines
+                    .filter { line ->
+                        line.centerX >= column.leftBoundary &&
+                            line.centerX < column.rightBoundary &&
+                            line.centerY >= row.topBoundary &&
+                            line.centerY < row.bottomBoundary
+                    }
+                    .sortedBy { it.top }
+                val entrants = parseMatchPairFromCellLines(cellLines) ?: return@columnLoop
+                val schedule = parseScheduleContextFromCell(cellLines)
+                matches += ImportedOrderMatch(
+                    courtName = column.name,
+                    order = row.order,
+                    left = entrants.first,
+                    right = entrants.second,
+                    scheduleLabel = schedule.label,
+                    manualNotBefore = schedule.manualNotBefore,
+                )
+            }
+        }
+
+        if (matches.size < columns.size) return null
+        val flatLines = recognized.text
+            .replace('\u000C', '\n')
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+
+        return ImportedOrderDocument(
+            tournamentName = extractTournamentName(flatLines) ?: "Imported Order Of Play",
+            courts = columns.map { it.name },
+            matches = matches,
+        )
+    }
+
+    private fun extractOcrLines(recognized: Text): List<OcrLine> {
+        return recognized.textBlocks
+            .flatMap { block -> block.lines }
+            .mapNotNull { line ->
+                val box = line.boundingBox ?: return@mapNotNull null
+                val text = line.text.normalizeSpaces().trim()
+                if (text.isBlank()) {
+                    null
+                } else {
+                    OcrLine(
+                        text = text,
+                        left = box.left.toFloat(),
+                        right = box.right.toFloat(),
+                        top = box.top.toFloat(),
+                        bottom = box.bottom.toFloat(),
+                    )
+                }
+            }
+    }
+
+    private fun detectCourtColumns(lines: List<OcrLine>): List<CourtColumnLayout> {
+        val minTop = lines.minOfOrNull { it.top } ?: return emptyList()
+        val maxBottom = lines.maxOfOrNull { it.bottom } ?: return emptyList()
+        val topBandLimit = minTop + (maxBottom - minTop) * 0.25f
+        val byName = linkedMapOf<String, OcrLine>()
+        lines.asSequence()
+            .filter { it.top <= topBandLimit }
+            .forEach { line ->
+                val courtName = parseCourtName(line.text) ?: return@forEach
+                val existing = byName[courtName]
+                if (existing == null || line.top < existing.top) {
+                    byName[courtName] = line
+                }
+            }
+
+        val headers = byName.entries.sortedBy { it.value.centerX }
+        if (headers.isEmpty()) return emptyList()
+        return headers.mapIndexed { index, entry ->
+            val leftBoundary = if (index == 0) {
+                Float.NEGATIVE_INFINITY
+            } else {
+                (headers[index - 1].value.centerX + entry.value.centerX) / 2f
+            }
+            val rightBoundary = if (index == headers.lastIndex) {
+                Float.POSITIVE_INFINITY
+            } else {
+                (entry.value.centerX + headers[index + 1].value.centerX) / 2f
+            }
+            CourtColumnLayout(
+                name = entry.key,
+                leftBoundary = leftBoundary,
+                rightBoundary = rightBoundary,
+                headerBottom = entry.value.bottom,
+            )
+        }
+    }
+
+    private fun detectRowBands(lines: List<OcrLine>, columns: List<CourtColumnLayout>): List<RowBandLayout> {
+        val firstColumn = columns.firstOrNull() ?: return emptyList()
+        val headerBottom = columns.maxOfOrNull { it.headerBottom } ?: 0f
+        val maxBottom = lines.maxOfOrNull { it.bottom } ?: return emptyList()
+
+        val rowMarkers = lines
+            .filter { it.centerX < firstColumn.leftBoundary }
+            .mapNotNull { line ->
+                parseRowNumber(line.text)?.let { line.centerY }
+            }
+            .sorted()
+            .fold(mutableListOf<Float>()) { acc, y ->
+                if (acc.isEmpty() || abs(acc.last() - y) > 16f) acc += y
+                acc
+            }
+
+        val anchors = if (rowMarkers.isNotEmpty()) {
+            rowMarkers
+        } else {
+            lines
+                .filter { line ->
+                    line.centerX >= firstColumn.leftBoundary &&
+                        line.centerX < firstColumn.rightBoundary &&
+                        line.top >= headerBottom &&
+                        containsScheduleKeyword(line.text)
+                }
+                .sortedBy { it.centerY }
+                .fold(mutableListOf<Float>()) { acc, line ->
+                    if (acc.isEmpty() || abs(acc.last() - line.centerY) > 16f) {
+                        acc += line.centerY
+                    }
+                    acc
+                }
+        }
+
+        if (anchors.isEmpty()) {
+            return listOf(
+                RowBandLayout(
+                    order = 1,
+                    topBoundary = headerBottom + 2f,
+                    bottomBoundary = maxBottom + 12f,
+                ),
+            )
+        }
+
+        return anchors.mapIndexed { index, centerY ->
+            val topBoundary = if (index == 0) {
+                headerBottom + 2f
+            } else {
+                (anchors[index - 1] + centerY) / 2f
+            }
+            val bottomBoundary = if (index == anchors.lastIndex) {
+                maxBottom + 12f
+            } else {
+                (centerY + anchors[index + 1]) / 2f
+            }
+            RowBandLayout(
+                order = index + 1,
+                topBoundary = topBoundary,
+                bottomBoundary = bottomBoundary,
+            )
+        }
+    }
+
+    private fun parseMatchPairFromCellLines(cellLines: List<OcrLine>): Pair<ParsedEntrant, ParsedEntrant>? {
+        if (cellLines.isEmpty()) return null
+
+        cellLines.forEach { line ->
+            val inline = extractInlinePair(line.text) ?: return@forEach
+            val left = parseEntrant(inline.leftRaw) ?: return@forEach
+            val right = parseEntrant(inline.rightRaw) ?: return@forEach
+            if (!left.name.equals(right.name, ignoreCase = true)) {
+                return left to right
+            }
+        }
+
+        val vsIndex = cellLines.indexOfFirst { isVsToken(it.text) }
+        if (vsIndex == -1) return null
+        val leftRaw = cellLines
+            .subList(0, vsIndex)
+            .asReversed()
+            .firstOrNull { isPotentialEntrantLine(it.text) }
+            ?.text
+            ?: return null
+        val rightRaw = cellLines
+            .drop(vsIndex + 1)
+            .firstOrNull { isPotentialEntrantLine(it.text) }
+            ?.text
+            ?: return null
+
+        val left = parseEntrant(leftRaw) ?: return null
+        val right = parseEntrant(rightRaw) ?: return null
+        if (left.name.equals(right.name, ignoreCase = true)) return null
+        return left to right
+    }
+
+    private fun parseScheduleContextFromCell(cellLines: List<OcrLine>): ScheduleContext {
+        if (cellLines.isEmpty()) return ScheduleContext(label = "Followed By", manualNotBefore = null)
+        val joined = cellLines.joinToString(" ") { it.text }
+        return parseScheduleContextFromText(joined)
+    }
+
+    private fun parseScheduleContextFromText(raw: String): ScheduleContext {
+        val normalized = raw.normalizeSpaces()
+        val label = when {
+            normalized.contains("Not Before", ignoreCase = true) -> "Not Before"
+            normalized.contains("Starting at", ignoreCase = true) -> "Starting at"
+            normalized.contains("Followed By", ignoreCase = true) -> "Followed By"
+            else -> "Followed By"
+        }
+        val time = extractTime(normalized)
+        val manualNotBefore = if (label == "Not Before" || label == "Starting at") {
+            time?.let { toTodayMillis(it) }
+        } else {
+            null
+        }
+        val scheduleLabel = if (time != null && (label == "Not Before" || label == "Starting at")) {
+            "$label $time"
+        } else {
+            label
+        }
+        return ScheduleContext(label = scheduleLabel, manualNotBefore = manualNotBefore)
+    }
+
+    private fun parseCourtName(raw: String): String? {
+        val normalized = raw.normalizeSpaces()
+        val match = Regex("(?i)c[o0]u?r?t\\s*([0-9]{1,2}|[A-Za-z])").find(normalized) ?: return null
+        return "Court ${match.groupValues[1].uppercase()}"
+    }
+
+    private fun parseRowNumber(raw: String): Int? {
+        val token = raw.trim().removeSuffix(".")
+        return token.toIntOrNull()?.takeIf { it in 1..64 }
+    }
+
+    private fun containsScheduleKeyword(value: String): Boolean {
+        return value.contains("Starting at", ignoreCase = true) ||
+            value.contains("Followed By", ignoreCase = true) ||
+            value.contains("Not Before", ignoreCase = true)
+    }
+
+    private fun isPotentialEntrantLine(value: String): Boolean {
+        val normalized = value.normalizeSpaces().trim()
+        if (normalized.isBlank()) return false
+        if (isVsToken(normalized)) return false
+        if (containsScheduleKeyword(normalized)) return false
+        if (parseCourtName(normalized) != null) return false
+        if (parseRowNumber(normalized) != null) return false
+        if (isNoiseLine(normalized) || isSeedToken(normalized) || isScoreLine(normalized)) return false
+        if (normalized.equals("GS", ignoreCase = true) || normalized.equals("BS", ignoreCase = true)) return false
+        return normalized.any { it.isLetter() }
     }
 
     private fun extractTournamentName(lines: List<String>): String? {
@@ -1598,7 +1875,7 @@ class AppRepository @Inject constructor(
 
     private fun extractCourtNames(lines: List<String>): List<String> {
         val courts = mutableListOf<String>()
-        val regex = Regex("(?i)Court\\s+([A-Za-z0-9]+)")
+        val regex = Regex("(?i)Court\\s*([A-Za-z0-9]+)")
         lines.forEach { line ->
             regex.findAll(line).forEach { match ->
                 val name = "Court ${match.groupValues[1]}"
@@ -1746,21 +2023,41 @@ class AppRepository @Inject constructor(
     }
 
     private fun parseEntrant(raw: String): ParsedEntrant? {
+        val matchedCountry = Regex("\\(([A-Za-z]{3})\\)")
+            .findAll(raw)
+            .map { it.groupValues[1].uppercase() }
+            .firstOrNull { it in ISO3_TO_ISO2.keys }
+            ?: Regex("\\b([A-Za-z]{3})\\b")
+                .findAll(raw)
+                .map { it.groupValues[1].uppercase() }
+                .firstOrNull { it in ISO3_TO_ISO2.keys }
+
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
+            .replace(Regex("\\([A-Za-z]{3}\\)"), " ")
+            .replace(Regex("(?i)\\b(?:GS|BS)\\b"), " ")
+            .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
             .replace(Regex("(?i)^court\\s+[A-Za-z0-9]+\\s*"), "")
-            .replace(Regex("(?i)^(?:starting\\s+at|followed\\s+by|not\\s+before)\\s*\\d{0,2}:?\\d{0,2}\\s*"), "")
             .replace(Regex("^\\d+\\.?\\s*"), "")
+            .replace(Regex("\\b\\d{1,2}:\\d{2}\\b"), " ")
             .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), "")
+            .replace(Regex("(^|\\s)[\\d()\\-:]+($|\\s)"), " ")
             .replace(".", " ")
             .normalizeSpaces()
             .trim()
         if (cleaned.isBlank()) return null
-        val match = Regex("^(.*?)(?:\\(([A-Za-z]{3})\\))?$").matchEntire(cleaned)
-        val name = (match?.groupValues?.getOrNull(1) ?: cleaned).normalizeSpaces().trim()
+        val name = cleaned
+            .split(' ')
+            .filter { token ->
+                token.isNotBlank() &&
+                    token.any { it.isLetter() } &&
+                    !token.equals(matchedCountry, ignoreCase = true)
+            }
+            .joinToString(" ")
+            .normalizeSpaces()
+            .trim()
         if (name.isBlank()) return null
-        val countryCode = match?.groupValues?.getOrNull(2)?.uppercase()?.ifBlank { null }
-        return ParsedEntrant(name = name, countryCode = countryCode)
+        return ParsedEntrant(name = name, countryCode = matchedCountry)
     }
 
     private fun findScheduleContext(lines: List<String>, aroundIndex: Int): ScheduleContext {
@@ -1822,7 +2119,13 @@ class AppRepository @Inject constructor(
     }
 
     private fun isVsToken(line: String): Boolean {
-        return line.trim().matches(Regex("(?i)^(?:v\\.?s\\.?|vs\\.?|v\\.)$"))
+        val token = line
+            .trim()
+            .lowercase()
+            .replace('5', 's')
+            .replace('$', 's')
+            .replace(Regex("[^a-z0-9]"), "")
+        return token == "vs" || token == "v"
     }
 
     private fun extractInlinePair(line: String): InlinePair? {
@@ -1934,6 +2237,30 @@ class AppRepository @Inject constructor(
         val endIndex: Int,
     )
 
+    private data class OcrLine(
+        val text: String,
+        val left: Float,
+        val right: Float,
+        val top: Float,
+        val bottom: Float,
+    ) {
+        val centerX: Float get() = (left + right) / 2f
+        val centerY: Float get() = (top + bottom) / 2f
+    }
+
+    private data class CourtColumnLayout(
+        val name: String,
+        val leftBoundary: Float,
+        val rightBoundary: Float,
+        val headerBottom: Float,
+    )
+
+    private data class RowBandLayout(
+        val order: Int,
+        val topBoundary: Float,
+        val bottomBoundary: Float,
+    )
+
     private data class InlinePair(
         val leftRaw: String,
         val rightRaw: String,
@@ -1962,7 +2289,7 @@ class AppRepository @Inject constructor(
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
-        val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?s\\.?|vs\\.?|v\\.)\\b")
+        val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
             "CHN" to "CN",
