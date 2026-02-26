@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Undo
@@ -64,10 +65,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -635,16 +639,23 @@ private fun FinalScoreDialog(
     var winner by remember { mutableStateOf<MatchWinnerSide?>(null) }
     var set1Left by remember { mutableStateOf("") }
     var set1Right by remember { mutableStateOf("") }
+    var set1TieBreakLeft by remember { mutableStateOf("") }
+    var set1TieBreakRight by remember { mutableStateOf("") }
     var set2Left by remember { mutableStateOf("") }
     var set2Right by remember { mutableStateOf("") }
+    var set2TieBreakLeft by remember { mutableStateOf("") }
+    var set2TieBreakRight by remember { mutableStateOf("") }
     var set3Left by remember { mutableStateOf("") }
     var set3Right by remember { mutableStateOf("") }
+    var set3TieBreakLeft by remember { mutableStateOf("") }
+    var set3TieBreakRight by remember { mutableStateOf("") }
+    val showThirdSet = needsThirdSet(set1Left, set1Right, set2Left, set2Right)
     val scoreText = buildScoreFromSetFields(
         listOf(
-            set1Left to set1Right,
-            set2Left to set2Right,
-            set3Left to set3Right,
-        ),
+            SetScoreInput(set1Left, set1Right, set1TieBreakLeft, set1TieBreakRight),
+            SetScoreInput(set2Left, set2Right, set2TieBreakLeft, set2TieBreakRight),
+            SetScoreInput(set3Left, set3Right, set3TieBreakLeft, set3TieBreakRight),
+        ).take(if (showThirdSet) 3 else 2),
     )
 
     AlertDialog(
@@ -683,23 +694,43 @@ private fun FinalScoreDialog(
                     label = "Set 1",
                     left = set1Left,
                     right = set1Right,
+                    tieBreakLeft = set1TieBreakLeft,
+                    tieBreakRight = set1TieBreakRight,
                     onLeftChange = { set1Left = sanitizeScoreCell(it) },
                     onRightChange = { set1Right = sanitizeScoreCell(it) },
+                    onTieBreakLeftChange = { set1TieBreakLeft = sanitizeTieBreakCell(it) },
+                    onTieBreakRightChange = { set1TieBreakRight = sanitizeTieBreakCell(it) },
+                    showTieBreakFields = isTieBreakSet(set1Left, set1Right),
+                    isLastVisibleRow = false,
                 )
                 ScoreSetRow(
                     label = "Set 2",
                     left = set2Left,
                     right = set2Right,
+                    tieBreakLeft = set2TieBreakLeft,
+                    tieBreakRight = set2TieBreakRight,
                     onLeftChange = { set2Left = sanitizeScoreCell(it) },
                     onRightChange = { set2Right = sanitizeScoreCell(it) },
+                    onTieBreakLeftChange = { set2TieBreakLeft = sanitizeTieBreakCell(it) },
+                    onTieBreakRightChange = { set2TieBreakRight = sanitizeTieBreakCell(it) },
+                    showTieBreakFields = isTieBreakSet(set2Left, set2Right),
+                    isLastVisibleRow = !showThirdSet,
                 )
-                ScoreSetRow(
-                    label = "Set 3",
-                    left = set3Left,
-                    right = set3Right,
-                    onLeftChange = { set3Left = sanitizeScoreCell(it) },
-                    onRightChange = { set3Right = sanitizeScoreCell(it) },
-                )
+                if (showThirdSet) {
+                    ScoreSetRow(
+                        label = "Set 3",
+                        left = set3Left,
+                        right = set3Right,
+                        tieBreakLeft = set3TieBreakLeft,
+                        tieBreakRight = set3TieBreakRight,
+                        onLeftChange = { set3Left = sanitizeScoreCell(it) },
+                        onRightChange = { set3Right = sanitizeScoreCell(it) },
+                        onTieBreakLeftChange = { set3TieBreakLeft = sanitizeTieBreakCell(it) },
+                        onTieBreakRightChange = { set3TieBreakRight = sanitizeTieBreakCell(it) },
+                        showTieBreakFields = isTieBreakSet(set3Left, set3Right),
+                        isLastVisibleRow = true,
+                    )
+                }
                 if (scoreText.isNotBlank()) {
                     Text(
                         text = "Recorded as: $scoreText",
@@ -813,9 +844,16 @@ private fun ScoreSetRow(
     label: String,
     left: String,
     right: String,
+    tieBreakLeft: String,
+    tieBreakRight: String,
     onLeftChange: (String) -> Unit,
     onRightChange: (String) -> Unit,
+    onTieBreakLeftChange: (String) -> Unit,
+    onTieBreakRightChange: (String) -> Unit,
+    showTieBreakFields: Boolean,
+    isLastVisibleRow: Boolean,
 ) {
+    val focusManager = LocalFocusManager.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -831,7 +869,13 @@ private fun ScoreSetRow(
             onValueChange = onLeftChange,
             singleLine = true,
             modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Next,
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Next) },
+            ),
         )
         Text(":")
         TextField(
@@ -839,8 +883,56 @@ private fun ScoreSetRow(
             onValueChange = onRightChange,
             singleLine = true,
             modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = if (showTieBreakFields || !isLastVisibleRow) ImeAction.Next else ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Next) },
+                onDone = { focusManager.clearFocus() },
+            ),
         )
+    }
+    if (showTieBreakFields) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Tiebreak",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            TextField(
+                value = tieBreakLeft,
+                onValueChange = onTieBreakLeftChange,
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next,
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Next) },
+                ),
+            )
+            Text(":")
+            TextField(
+                value = tieBreakRight,
+                onValueChange = onTieBreakRightChange,
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = if (isLastVisibleRow) ImeAction.Done else ImeAction.Next,
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Next) },
+                    onDone = { focusManager.clearFocus() },
+                ),
+            )
+        }
     }
 }
 
@@ -1007,15 +1099,62 @@ private fun sanitizeScoreCell(raw: String): String {
     return raw.filter { it.isDigit() }.take(2)
 }
 
-private fun buildScoreFromSetFields(sets: List<Pair<String, String>>): String {
+private fun sanitizeTieBreakCell(raw: String): String {
+    return raw.filter { it.isDigit() }.take(2)
+}
+
+private data class SetScoreInput(
+    val left: String,
+    val right: String,
+    val tieBreakLeft: String,
+    val tieBreakRight: String,
+)
+
+private enum class SetWinner {
+    LEFT,
+    RIGHT,
+}
+
+private fun parseSetWinner(left: String, right: String): SetWinner? {
+    val leftValue = left.toIntOrNull() ?: return null
+    val rightValue = right.toIntOrNull() ?: return null
+    if (leftValue == rightValue) return null
+    return if (leftValue > rightValue) SetWinner.LEFT else SetWinner.RIGHT
+}
+
+private fun needsThirdSet(
+    set1Left: String,
+    set1Right: String,
+    set2Left: String,
+    set2Right: String,
+): Boolean {
+    val set1Winner = parseSetWinner(set1Left, set1Right) ?: return false
+    val set2Winner = parseSetWinner(set2Left, set2Right) ?: return false
+    return set1Winner != set2Winner
+}
+
+private fun isTieBreakSet(left: String, right: String): Boolean {
+    val leftValue = left.toIntOrNull() ?: return false
+    val rightValue = right.toIntOrNull() ?: return false
+    return (leftValue == 7 && rightValue == 6) || (leftValue == 6 && rightValue == 7)
+}
+
+private fun buildScoreFromSetFields(sets: List<SetScoreInput>): String {
     return sets
-        .mapNotNull { (left, right) ->
-            val leftValue = left.trim()
-            val rightValue = right.trim()
+        .mapNotNull { set ->
+            val leftValue = set.left.trim()
+            val rightValue = set.right.trim()
             if (leftValue.isBlank() && rightValue.isBlank()) {
                 null
             } else {
-                "$leftValue:$rightValue"
+                val base = "$leftValue:$rightValue"
+                if (isTieBreakSet(leftValue, rightValue)) {
+                    val tbLeft = set.tieBreakLeft.trim()
+                    val tbRight = set.tieBreakRight.trim()
+                    if (tbLeft.isNotBlank() && tbRight.isNotBlank()) "$base($tbLeft:$tbRight)" else base
+                } else {
+                    base
+                }
             }
         }
         .joinToString(" ")
