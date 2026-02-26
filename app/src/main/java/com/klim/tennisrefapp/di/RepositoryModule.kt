@@ -3,8 +3,10 @@ package com.klim.tennisrefapp.di
 import com.klim.tennisrefapp.data.repository.AppRepository
 import com.klim.tennisrefapp.domain.repository.CourtRepository
 import com.klim.tennisrefapp.domain.repository.EventLogRepository
+import com.klim.tennisrefapp.domain.repository.HistoryRepository
 import com.klim.tennisrefapp.domain.repository.MatchRepository
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
+import com.klim.tennisrefapp.domain.repository.PlayerInsightsRepository
 import com.klim.tennisrefapp.domain.repository.SlotRepository
 import com.klim.tennisrefapp.domain.repository.TeamRepository
 import com.klim.tennisrefapp.domain.repository.TournamentRepository
@@ -30,6 +32,12 @@ object RepositoryModule {
 
     @Provides
     fun providePlayerRepository(repository: AppRepository): PlayerRepository = repository
+
+    @Provides
+    fun providePlayerInsightsRepository(repository: AppRepository): PlayerInsightsRepository = repository
+
+    @Provides
+    fun provideHistoryRepository(repository: AppRepository): HistoryRepository = repository
 
     @Provides
     fun provideTeamRepository(repository: AppRepository): TeamRepository = repository

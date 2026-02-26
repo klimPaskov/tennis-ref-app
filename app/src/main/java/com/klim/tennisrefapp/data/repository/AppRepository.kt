@@ -26,11 +26,16 @@ import com.klim.tennisrefapp.data.local.entity.TournamentEntity
 import com.klim.tennisrefapp.domain.model.CourtCard
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
+import com.klim.tennisrefapp.domain.model.CompletedCourtMatch
 import com.klim.tennisrefapp.domain.model.MatchDependency
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
+import com.klim.tennisrefapp.domain.model.MatchHistoryDetail
 import com.klim.tennisrefapp.domain.model.NotBeforeInput
 import com.klim.tennisrefapp.domain.model.PlayerAvailability
+import com.klim.tennisrefapp.domain.model.PlayerDetailInsight
+import com.klim.tennisrefapp.domain.model.PlayerMatchSnapshot
+import com.klim.tennisrefapp.domain.model.PlayerOverview
 import com.klim.tennisrefapp.domain.model.PlayerRef
 import com.klim.tennisrefapp.domain.model.PlayerSummary
 import com.klim.tennisrefapp.domain.model.SideParticipant
@@ -41,9 +46,11 @@ import com.klim.tennisrefapp.domain.model.SlotTypeRef
 import com.klim.tennisrefapp.domain.model.TeamSummary
 import com.klim.tennisrefapp.domain.repository.CourtRepository
 import com.klim.tennisrefapp.domain.repository.EventLogRepository
+import com.klim.tennisrefapp.domain.repository.HistoryRepository
 import com.klim.tennisrefapp.domain.repository.MatchResultType
 import com.klim.tennisrefapp.domain.repository.MatchRepository
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
+import com.klim.tennisrefapp.domain.repository.PlayerInsightsRepository
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
 import com.klim.tennisrefapp.domain.repository.SlotRepository
 import com.klim.tennisrefapp.domain.repository.ApplyViolationResult
@@ -82,7 +89,9 @@ class AppRepository @Inject constructor(
     CourtRepository,
     MatchRepository,
     EventLogRepository,
+    HistoryRepository,
     PlayerRepository,
+    PlayerInsightsRepository,
     TeamRepository,
     SlotRepository {
 
@@ -287,6 +296,11 @@ class AppRepository @Inject constructor(
         recomputeNotBeforeAndSchedule()
     }
 
+    override suspend fun reloadOrderOfPlay() {
+        database.clearAllTables()
+        seedIfEmpty()
+    }
+
     override fun observePlayers(): Flow<List<PlayerSummary>> {
         return playerDao.observeAll().map { players ->
             players.map { player ->
@@ -297,6 +311,255 @@ class AppRepository @Inject constructor(
                     restMinutes = player.restMinutes,
                 )
             }
+        }
+    }
+
+    override fun observePlayerOverviews(): Flow<List<PlayerOverview>> {
+        return combine(
+            playerDao.observeAll(),
+            matchDao.observeAll(),
+            slotDao.observeAll(),
+            teamPlayerDao.observeAll(),
+            courtDao.observeActiveCourts(),
+            tournamentDao.observeFirst(),
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val players = values[0] as List<PlayerEntity>
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[4] as List<CourtEntity>
+            val tournament = values[5] as TournamentEntity?
+
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val courtsById = courts.associateBy { it.id }
+
+            players.map { player ->
+                val playerMatches = matches
+                    .filter { match -> matchHasPlayer(match.id, player.id, context) }
+                    .sortedBy { it.id }
+                val completedCount = playerMatches.count { it.status == MatchStatus.COMPLETED }
+                val next = playerMatches
+                    .asSequence()
+                    .filter { it.status == MatchStatus.SCHEDULED || it.status == MatchStatus.IN_PROGRESS }
+                    .sortedWith(
+                        compareBy<MatchEntity> { computeNotBefore(it, context) ?: Long.MAX_VALUE }
+                            .thenBy { it.id },
+                    )
+                    .firstOrNull()
+                PlayerOverview(
+                    playerId = player.id,
+                    name = player.displayName,
+                    countryCode = player.countryCode,
+                    completedCount = completedCount,
+                    nextMatchLabel = next?.let { formatMatchLabel(it, context) },
+                    nextCourtName = next?.courtId?.let { courtsById[it]?.name ?: "Court $it" },
+                    nextNotBeforeMillis = next?.let { computeNotBefore(it, context) },
+                )
+            }.sortedBy { it.name }
+        }
+    }
+
+    override fun observePlayerDetailInsight(playerId: Long): Flow<PlayerDetailInsight?> {
+        return combine(
+            playerDao.observeAll(),
+            matchDao.observeAll(),
+            slotDao.observeAll(),
+            teamPlayerDao.observeAll(),
+            courtDao.observeActiveCourts(),
+            tournamentDao.observeFirst(),
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val players = values[0] as List<PlayerEntity>
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[4] as List<CourtEntity>
+            val tournament = values[5] as TournamentEntity?
+
+            val player = players.firstOrNull { it.id == playerId } ?: return@combine null
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val courtsById = courts.associateBy { it.id }
+            val playerMatches = matches.filter { matchHasPlayer(it.id, player.id, context) }
+
+            val completed = playerMatches
+                .filter { it.status == MatchStatus.COMPLETED }
+                .sortedByDescending { it.endedAt ?: Long.MIN_VALUE }
+                .map { match ->
+                    PlayerMatchSnapshot(
+                        matchId = match.id,
+                        courtName = match.courtId?.let { courtsById[it]?.name ?: "Court $it" },
+                        matchLabel = formatMatchLabel(match, context),
+                        status = match.status.toCourtStatus(),
+                        scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
+                        notBeforeMillis = null,
+                        startedAtMillis = match.startedAt,
+                        endedAtMillis = match.endedAt,
+                    )
+                }
+
+            val next = playerMatches
+                .asSequence()
+                .filter { it.status == MatchStatus.SCHEDULED || it.status == MatchStatus.IN_PROGRESS }
+                .sortedWith(
+                    compareBy<MatchEntity> { computeNotBefore(it, context) ?: Long.MAX_VALUE }
+                        .thenBy { it.id },
+                )
+                .firstOrNull()
+                ?.let { match ->
+                    PlayerMatchSnapshot(
+                        matchId = match.id,
+                        courtName = match.courtId?.let { courtsById[it]?.name ?: "Court $it" },
+                        matchLabel = formatMatchLabel(match, context),
+                        status = match.status.toCourtStatus(),
+                        scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
+                        notBeforeMillis = computeNotBefore(match, context),
+                        startedAtMillis = match.startedAt,
+                        endedAtMillis = match.endedAt,
+                    )
+                }
+
+            PlayerDetailInsight(
+                playerId = player.id,
+                name = player.displayName,
+                countryCode = player.countryCode,
+                completedMatches = completed,
+                nextMatch = next,
+            )
+        }
+    }
+
+    override fun observeCompletedMatchesByCourt(): Flow<List<CompletedCourtMatch>> {
+        return combine(
+            courtDao.observeActiveCourts(),
+            matchDao.observeAll(),
+            slotDao.observeAll(),
+            teamPlayerDao.observeAll(),
+            playerDao.observeAll(),
+            tournamentDao.observeFirst(),
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[0] as List<CourtEntity>
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val players = values[4] as List<PlayerEntity>
+            val tournament = values[5] as TournamentEntity?
+
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val courtsById = courts.associateBy { it.id }
+            matches
+                .filter { it.status == MatchStatus.COMPLETED }
+                .sortedWith(
+                    compareBy<MatchEntity>({ courtsById[it.courtId]?.sortOrder ?: Int.MAX_VALUE })
+                        .thenByDescending { it.endedAt ?: Long.MIN_VALUE },
+                )
+                .map { match ->
+                    CompletedCourtMatch(
+                        matchId = match.id,
+                        courtId = match.courtId,
+                        courtName = match.courtId?.let { courtsById[it]?.name ?: "Court $it" },
+                        matchLabel = formatMatchLabel(match, context),
+                        scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
+                        startedAtMillis = match.startedAt,
+                        endedAtMillis = match.endedAt,
+                    )
+                }
+        }
+    }
+
+    override fun observeMatchHistory(matchId: Long): Flow<MatchHistoryDetail?> {
+        return combine(
+            matchDao.observeAll(),
+            courtDao.observeActiveCourts(),
+            slotDao.observeAll(),
+            teamPlayerDao.observeAll(),
+            playerDao.observeAll(),
+            tournamentDao.observeFirst(),
+            eventLogDao.observeByMatchId(matchId),
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[0] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[1] as List<CourtEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val players = values[4] as List<PlayerEntity>
+            val tournament = values[5] as TournamentEntity?
+            @Suppress("UNCHECKED_CAST")
+            val events = values[6] as List<EventLogEntity>
+
+            val match = matches.firstOrNull { it.id == matchId } ?: return@combine null
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slots.groupBy { it.matchId },
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val courtName = match.courtId?.let { courtId ->
+                courts.firstOrNull { it.id == courtId }?.name ?: "Court $courtId"
+            }
+            MatchHistoryDetail(
+                matchId = match.id,
+                courtName = courtName,
+                matchLabel = formatMatchLabel(match, context),
+                scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
+                startedAtMillis = match.startedAt,
+                endedAtMillis = match.endedAt,
+                events = events.map { event ->
+                    MatchEvent(
+                        id = event.id,
+                        matchId = event.matchId,
+                        courtId = event.courtId,
+                        timestamp = event.timestamp,
+                        kind = event.eventType.toDomainKind(),
+                        offenderPlayerId = event.offenderPlayerId,
+                        message = event.message,
+                    )
+                },
+            )
         }
     }
 
@@ -793,8 +1056,10 @@ class AppRepository @Inject constructor(
     }
 
     private fun formatMatchLabel(match: MatchEntity, context: BuildContext): String {
-        val left = sideForMatch(match.id, SlotPosition.LEFT, context)?.label ?: "TBD"
-        val right = sideForMatch(match.id, SlotPosition.RIGHT, context)?.label ?: "TBD"
+        val leftSide = sideForMatch(match.id, SlotPosition.LEFT, context)
+        val rightSide = sideForMatch(match.id, SlotPosition.RIGHT, context)
+        val left = formatSideShortLabel(leftSide)
+        val right = formatSideShortLabel(rightSide)
         return "$left vs $right"
     }
 
@@ -917,6 +1182,51 @@ class AppRepository @Inject constructor(
         return runCatching { ViolationCategory.valueOf(categoryLabel) }.getOrNull()
     }
 
+    private fun matchHasPlayer(matchId: Long, playerId: Long, context: BuildContext): Boolean {
+        val left = sideForMatch(matchId, SlotPosition.LEFT, context)
+        val right = sideForMatch(matchId, SlotPosition.RIGHT, context)
+        val ids = buildList {
+            addAll(left?.players?.map { it.playerId }.orEmpty())
+            addAll(right?.players?.map { it.playerId }.orEmpty())
+        }
+        return playerId in ids
+    }
+
+    private fun buildScoreLabel(scoreText: String?, resultType: MatchResultTypeEntity?): String? {
+        val score = scoreText?.trim().orEmpty()
+        return when (resultType) {
+            MatchResultTypeEntity.RETIREMENT -> if (score.isBlank()) "RET" else "$score RET"
+            MatchResultTypeEntity.WALKOVER -> if (score.isBlank()) "WO" else "$score WO"
+            MatchResultTypeEntity.DEFAULT -> if (score.isBlank()) "DEF" else "$score DEF"
+            MatchResultTypeEntity.NORMAL -> score.ifBlank { null }
+            null -> score.ifBlank { null }
+        }
+    }
+
+    private fun formatSideShortLabel(side: SideParticipant?): String {
+        val players = side?.players.orEmpty()
+        if (players.isNotEmpty()) {
+            return players.joinToString(" / ") { player ->
+                val flag = countryCodeToFlagEmoji(player.countryCode)
+                if (flag != null) "$flag ${player.name}" else player.name
+            }
+        }
+        return side?.label ?: "TBD"
+    }
+
+    private fun countryCodeToFlagEmoji(countryCode: String?): String? {
+        val normalized = countryCode?.trim()?.uppercase()?.ifBlank { null } ?: return null
+        val iso2 = if (normalized.length == 2) {
+            normalized
+        } else {
+            ISO3_TO_ISO2[normalized]
+        } ?: return null
+        if (iso2.length != 2 || !iso2.all { it in 'A'..'Z' }) return null
+        val first = Character.codePointAt(iso2, 0) - 0x41 + 0x1F1E6
+        val second = Character.codePointAt(iso2, 1) - 0x41 + 0x1F1E6
+        return String(Character.toChars(first)) + String(Character.toChars(second))
+    }
+
     private suspend fun recomputeNotBeforeAndSchedule() {
         database.withTransaction {
             val matches = matchDao.getAll()
@@ -978,6 +1288,28 @@ class AppRepository @Inject constructor(
 
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
+        val ISO3_TO_ISO2 = mapOf(
+            "BEL" to "BE",
+            "CHN" to "CN",
+            "CZE" to "CZ",
+            "DEN" to "DK",
+            "EST" to "EE",
+            "FIN" to "FI",
+            "GBR" to "GB",
+            "GER" to "DE",
+            "ISR" to "IL",
+            "ITA" to "IT",
+            "JPN" to "JP",
+            "LAT" to "LV",
+            "LIE" to "LI",
+            "LTU" to "LT",
+            "POL" to "PL",
+            "ROU" to "RO",
+            "SLO" to "SI",
+            "SUI" to "CH",
+            "SWE" to "SE",
+            "UKR" to "UA",
+        )
     }
 }
 
