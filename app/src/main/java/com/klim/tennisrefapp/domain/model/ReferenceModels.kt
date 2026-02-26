@@ -14,6 +14,7 @@ enum class SlotPositionRef {
 data class PlayerSummary(
     val id: Long,
     val displayName: String,
+    val countryCode: String?,
     val restMinutes: Int?,
 )
 

@@ -32,7 +32,7 @@ import com.klim.tennisrefapp.data.local.entity.TournamentEntity
         SlotEntity::class,
         EventLogEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(RoomConverters::class)

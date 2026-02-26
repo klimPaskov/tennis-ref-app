@@ -30,12 +30,24 @@ import kotlinx.coroutines.launch
 
 private const val CHANNEL_ID = "court_timer_channel"
 private const val CHANNEL_NAME = "Court Timer"
-private const val FIVE_MINUTES_MS = 5 * 60 * 1000L
+enum class CourtTimerType(
+    val label: String,
+    val durationMillis: Long,
+) {
+    WARMUP("Warm-up", 5 * 60 * 1000L),
+    SIDE_SWITCH("Side switch", 90 * 1000L),
+    SET_BREAK("Set break", 120 * 1000L),
+    TOILET_BREAK("Toilet break", 3 * 60 * 1000L),
+    OFF_COURT("Off-court", 5 * 60 * 1000L),
+    MEDICAL_TIMEOUT("Medical timeout", 3 * 60 * 1000L),
+    EQUIPMENT_FIX("Equipment fix", 2 * 60 * 1000L),
+}
 
 data class CourtTimerState(
     val courtId: Long,
     val matchId: Long,
     val courtName: String,
+    val timerType: CourtTimerType,
     val remainingMillis: Long,
     val isRunning: Boolean,
 )
@@ -52,41 +64,37 @@ class CourtTimerManager @Inject constructor(
 
     fun observeTimer(courtId: Long): Flow<CourtTimerState?> = state.map { it[courtId] }
 
-    fun startOrRestart(courtId: Long, matchId: Long, courtName: String) {
+    fun startOrRestart(
+        courtId: Long,
+        matchId: Long,
+        courtName: String,
+        timerType: CourtTimerType,
+    ) {
         stop(courtId)
         ensureChannel()
 
+        val totalDuration = timerType.durationMillis
         val startedAt = System.currentTimeMillis()
-        var fired3 = false
-        var fired4 = false
-        var fired5 = false
+        logTimerEvent(courtId, matchId, timerType, "START")
 
         val job = scope.launch {
             while (true) {
                 val elapsed = System.currentTimeMillis() - startedAt
-                val remaining = max(0L, FIVE_MINUTES_MS - elapsed)
+                val remaining = max(0L, totalDuration - elapsed)
 
                 state.value = state.value.toMutableMap().also { map ->
                     map[courtId] = CourtTimerState(
                         courtId = courtId,
                         matchId = matchId,
                         courtName = courtName,
+                        timerType = timerType,
                         remainingMillis = remaining,
                         isRunning = remaining > 0,
                     )
                 }
 
-                if (!fired3 && remaining <= 3 * 60 * 1000L) {
-                    fired3 = true
-                    onMilestone(courtId, matchId, courtName, "3:00 reached", 1)
-                }
-                if (!fired4 && remaining <= 60 * 1000L) {
-                    fired4 = true
-                    onMilestone(courtId, matchId, courtName, "4:00 reached", 1)
-                }
-                if (!fired5 && remaining <= 0L) {
-                    fired5 = true
-                    onMilestone(courtId, matchId, courtName, "5:00 reached", 2)
+                if (remaining <= 0L) {
+                    onFinished(courtId, matchId, courtName, timerType)
                     break
                 }
 
@@ -98,8 +106,12 @@ class CourtTimerManager @Inject constructor(
     }
 
     fun stop(courtId: Long) {
+        val current = state.value[courtId]
         timerJobs.remove(courtId)?.cancel()
         state.value = state.value.toMutableMap().also { map -> map.remove(courtId) }
+        if (current != null) {
+            logTimerEvent(courtId, current.matchId, current.timerType, "STOP")
+        }
     }
 
     private fun ensureChannel() {
@@ -109,24 +121,15 @@ class CourtTimerManager @Inject constructor(
         manager.createNotificationChannel(channel)
     }
 
-    private fun onMilestone(
+    private fun onFinished(
         courtId: Long,
         matchId: Long,
         courtName: String,
-        milestoneLabel: String,
-        vibrationCount: Int,
+        timerType: CourtTimerType,
     ) {
-        vibrate(vibrationCount)
-        notify(courtId, courtName, milestoneLabel)
-        scope.launch {
-            eventLogRepository.logEvent(
-                matchId = matchId,
-                courtId = courtId,
-                kind = MatchEventKind.TIMER,
-                offenderPlayerId = null,
-                message = "TIMER|$milestoneLabel",
-            )
-        }
+        vibrate(if (timerType == CourtTimerType.WARMUP) 2 else 1)
+        notify(courtId, courtName, "${timerType.label} ended")
+        logTimerEvent(courtId, matchId, timerType, "DONE")
     }
 
     private fun notify(courtId: Long, courtName: String, milestoneLabel: String) {
@@ -171,6 +174,23 @@ class CourtTimerManager @Inject constructor(
         } else {
             @Suppress("DEPRECATION")
             vibrator.vibrate(timings, -1)
+        }
+    }
+
+    private fun logTimerEvent(
+        courtId: Long,
+        matchId: Long,
+        timerType: CourtTimerType,
+        action: String,
+    ) {
+        scope.launch {
+            eventLogRepository.logEvent(
+                matchId = matchId,
+                courtId = courtId,
+                kind = MatchEventKind.TIMER,
+                offenderPlayerId = null,
+                message = "TIMER|${timerType.name}|$action",
+            )
         }
     }
 }

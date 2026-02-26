@@ -90,20 +90,49 @@ class AppRepository @Inject constructor(
         if (tournamentDao.count() > 0) return
 
         val now = System.currentTimeMillis()
-        val playerNames = listOf(
-            "Yiyuan Su",
-            "Vincent Fletcher",
-            "Sonia Sirenius",
-            "Vladislava Lescinska",
-            "Elizaveta Anikina",
-            "Sofia Ioana Voicu",
-            "Hanna Vanni",
-            "Vera Morozova",
-            "Kamilla Cernousova",
-            "Marie Benmouyal",
-            "Filip Hesser",
-            "Andreas Kuum",
+        data class SeedEntrant(val name: String, val countryCode: String)
+        data class SeedMatch(
+            val courtName: String,
+            val order: Int,
+            val left: SeedEntrant,
+            val right: SeedEntrant,
+            val score: String? = null,
+            val winnerSide: MatchWinnerSide? = null,
         )
+        val courtNames = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8")
+        val seedMatches = listOf(
+            SeedMatch("Court 2", 1, SeedEntrant("Yiyuan Su", "CHN"), SeedEntrant("Vincent Fletcher", "GBR"), "3-6 3-6", MatchWinnerSide.RIGHT),
+            SeedMatch("Court 2", 2, SeedEntrant("Hanna Vanni", "FIN"), SeedEntrant("Vera Morozova", "EST")),
+            SeedMatch("Court 2", 3, SeedEntrant("Elizabete Marta Hamitova", "LAT"), SeedEntrant("Margarita Novik", "EST")),
+            SeedMatch("Court 2", 4, SeedEntrant("Filip Hesser", "SWE"), SeedEntrant("Andreas Kuum", "EST")),
+            SeedMatch("Court 3", 1, SeedEntrant("Sonia Sirenius", "FIN"), SeedEntrant("Vladislava Lescinska", "LAT"), "6-2 6-4", MatchWinnerSide.LEFT),
+            SeedMatch("Court 3", 2, SeedEntrant("Kamilla Cernousova", "LAT"), SeedEntrant("Marie Benmouyal", "DEN")),
+            SeedMatch("Court 3", 3, SeedEntrant("Mark Griaziutin Tverskoj", "LTU"), SeedEntrant("Alex Tuomolin", "FIN")),
+            SeedMatch("Court 3", 4, SeedEntrant("Gabriel Maciel Araujo Pyndt", "DEN"), SeedEntrant("Nick Mertgens", "GER")),
+            SeedMatch("Court 4", 1, SeedEntrant("Elizaveta Anikina", "EST"), SeedEntrant("Sofia Ioana Voicu", "BEL"), "6-1 6-0", MatchWinnerSide.LEFT),
+            SeedMatch("Court 4", 2, SeedEntrant("Nikita Smirnov", "EST"), SeedEntrant("Moritz Glauser", "LIE")),
+            SeedMatch("Court 4", 3, SeedEntrant("Julia Kolodziejska", "POL"), SeedEntrant("Viktoria Sidorenkova", "EST")),
+            SeedMatch("Court 4", 4, SeedEntrant("Daria Podlipskaya", "EST"), SeedEntrant("Elin Kalmus", "EST")),
+            SeedMatch("Court 5", 1, SeedEntrant("Sonja Wedenski", "SWE"), SeedEntrant("Varvara Trifonova", "EST"), "6-2 6-1", MatchWinnerSide.LEFT),
+            SeedMatch("Court 5", 2, SeedEntrant("Svit Suljic", "SLO"), SeedEntrant("Ken Ink", "EST")),
+            SeedMatch("Court 5", 3, SeedEntrant("Liisa Marii Pohjala", "EST"), SeedEntrant("Grace Bernstein", "SWE")),
+            SeedMatch("Court 5", 4, SeedEntrant("Luukas Raudkivi", "EST"), SeedEntrant("Jan Werblinski", "POL")),
+            SeedMatch("Court 6", 1, SeedEntrant("Asia Basiletti", "ITA"), SeedEntrant("Aleksandra Maksimova", "EST"), "6-1 6-2", MatchWinnerSide.LEFT),
+            SeedMatch("Court 6", 2, SeedEntrant("Margarita Aktuganova", "ISR"), SeedEntrant("Ksenia Semjonova", "EST")),
+            SeedMatch("Court 6", 3, SeedEntrant("Vlad Secara", "ROU"), SeedEntrant("Rasmus Stalmeister", "EST")),
+            SeedMatch("Court 6", 4, SeedEntrant("Nand Vandepoele", "BEL"), SeedEntrant("Egert Trave", "EST")),
+            SeedMatch("Court 7", 1, SeedEntrant("Edwin Averjanov", "EST"), SeedEntrant("Jan Sykora", "CZE"), "4-6 3-6", MatchWinnerSide.RIGHT),
+            SeedMatch("Court 7", 2, SeedEntrant("Eriks Valeinis", "LAT"), SeedEntrant("Mads Bruhn Aaby", "DEN")),
+            SeedMatch("Court 7", 3, SeedEntrant("Elizaveta Bryakina", "EST"), SeedEntrant("Luana Kappeler", "SUI")),
+            SeedMatch("Court 7", 4, SeedEntrant("Kirils Sokolovs", "LAT"), SeedEntrant("Verneri Riikonen", "FIN")),
+            SeedMatch("Court 8", 1, SeedEntrant("Markus Valtson", "EST"), SeedEntrant("Asger Sorensen", "DEN"), "2-6 6-4 1-6", MatchWinnerSide.RIGHT),
+            SeedMatch("Court 8", 2, SeedEntrant("Maryna Levadna", "UKR"), SeedEntrant("Marie Johanna Lapimaa", "EST")),
+            SeedMatch("Court 8", 3, SeedEntrant("Ewangelina Penkevych", "POL"), SeedEntrant("Nora Olivia Adamson", "EST")),
+            SeedMatch("Court 8", 4, SeedEntrant("Hitoshi Shirabe", "JPN"), SeedEntrant("Mark Gregor Toniste", "EST")),
+        )
+        val entrants = seedMatches
+            .flatMap { listOf(it.left, it.right) }
+            .distinctBy { it.name }
 
         database.withTransaction {
             tournamentDao.insert(
@@ -115,338 +144,144 @@ class AppRepository @Inject constructor(
                 ),
             )
 
-            courtDao.insertAll(
-                listOf(
-                    CourtEntity(id = 1L, tournamentId = 1L, name = "Court 2", sortOrder = 1),
-                    CourtEntity(id = 2L, tournamentId = 1L, name = "Court 3", sortOrder = 2),
-                    CourtEntity(id = 3L, tournamentId = 1L, name = "Court 4", sortOrder = 3),
-                ),
-            )
+            val courtEntities = courtNames.mapIndexed { index, name ->
+                CourtEntity(
+                    id = (index + 1).toLong(),
+                    tournamentId = 1L,
+                    name = name,
+                    sortOrder = index + 1,
+                )
+            }
+            courtDao.insertAll(courtEntities)
 
-            playerDao.insertAll(
-                playerNames.mapIndexed { index, name ->
-                    PlayerEntity(
-                        id = (index + 1).toLong(),
-                        tournamentId = 1L,
-                        displayName = name,
-                        restMinutes = 30,
-                    )
-                },
-            )
+            val playerEntities = entrants.mapIndexed { index, entrant ->
+                PlayerEntity(
+                    id = (index + 1).toLong(),
+                    tournamentId = 1L,
+                    displayName = entrant.name,
+                    countryCode = entrant.countryCode,
+                    restMinutes = 30,
+                )
+            }
+            playerDao.insertAll(playerEntities)
 
             teamDao.insertAll(
-                playerNames.indices.map { index ->
+                playerEntities.map { player ->
                     TeamEntity(
-                        id = (index + 1).toLong(),
-                        tournamentId = 1L,
+                        id = player.id,
+                        tournamentId = player.tournamentId,
                         name = null,
                     )
                 },
             )
 
             teamPlayerDao.insertAll(
-                playerNames.indices.map { index ->
+                playerEntities.map { player ->
                     TeamPlayerCrossRefEntity(
-                        teamId = (index + 1).toLong(),
-                        playerId = (index + 1).toLong(),
+                        teamId = player.id,
+                        playerId = player.id,
                         playerOrder = 0,
                     )
                 },
             )
 
-            matchDao.insertAll(
-                listOf(
-                    MatchEntity(
-                        id = 100L,
-                        tournamentId = 1L,
-                        courtId = 1L,
-                        roundName = "First Match",
-                        status = MatchStatus.COMPLETED,
-                        manualNotBefore = null,
-                        computedNotBefore = null,
-                        startedAt = now - 240 * 60_000L,
-                        endedAt = now - 210 * 60_000L,
-                        winnerTeamId = 2L,
-                        initialLeftTeamId = 1L,
-                        initialRightTeamId = 2L,
-                        initialServerPlayerId = 1L,
-                        resultType = MatchResultTypeEntity.NORMAL,
-                        scoreText = "3-6 3-6",
-                    ),
-                    MatchEntity(
-                        id = 101L,
-                        tournamentId = 1L,
-                        courtId = 2L,
-                        roundName = "First Match",
-                        status = MatchStatus.COMPLETED,
-                        manualNotBefore = null,
-                        computedNotBefore = null,
-                        startedAt = now - 230 * 60_000L,
-                        endedAt = now - 200 * 60_000L,
-                        winnerTeamId = 3L,
-                        initialLeftTeamId = 3L,
-                        initialRightTeamId = 4L,
-                        initialServerPlayerId = 3L,
-                        resultType = MatchResultTypeEntity.NORMAL,
-                        scoreText = "6-2 6-4",
-                    ),
-                    MatchEntity(
-                        id = 102L,
-                        tournamentId = 1L,
-                        courtId = 3L,
-                        roundName = "First Match",
-                        status = MatchStatus.COMPLETED,
-                        manualNotBefore = null,
-                        computedNotBefore = null,
-                        startedAt = now - 220 * 60_000L,
-                        endedAt = now - 190 * 60_000L,
-                        winnerTeamId = 5L,
-                        initialLeftTeamId = 5L,
-                        initialRightTeamId = 6L,
-                        initialServerPlayerId = 5L,
-                        resultType = MatchResultTypeEntity.NORMAL,
-                        scoreText = "6-1 6-0",
-                    ),
-                    MatchEntity(
-                        id = 103L,
-                        tournamentId = 1L,
-                        courtId = 1L,
-                        roundName = "Followed By",
-                        status = MatchStatus.SCHEDULED,
-                        manualNotBefore = now + 15 * 60_000L,
-                        computedNotBefore = null,
-                        startedAt = null,
-                        endedAt = null,
-                        winnerTeamId = null,
-                        initialLeftTeamId = null,
-                        initialRightTeamId = null,
-                        initialServerPlayerId = null,
-                        resultType = null,
-                        scoreText = null,
-                    ),
-                    MatchEntity(
-                        id = 104L,
-                        tournamentId = 1L,
-                        courtId = 2L,
-                        roundName = "Followed By",
-                        status = MatchStatus.SCHEDULED,
-                        manualNotBefore = now + 20 * 60_000L,
-                        computedNotBefore = null,
-                        startedAt = null,
-                        endedAt = null,
-                        winnerTeamId = null,
-                        initialLeftTeamId = null,
-                        initialRightTeamId = null,
-                        initialServerPlayerId = null,
-                        resultType = null,
-                        scoreText = null,
-                    ),
-                    MatchEntity(
-                        id = 105L,
-                        tournamentId = 1L,
-                        courtId = 3L,
-                        roundName = "Followed By",
-                        status = MatchStatus.SCHEDULED,
-                        manualNotBefore = now + 25 * 60_000L,
-                        computedNotBefore = null,
-                        startedAt = null,
-                        endedAt = null,
-                        winnerTeamId = null,
-                        initialLeftTeamId = null,
-                        initialRightTeamId = null,
-                        initialServerPlayerId = null,
-                        resultType = null,
-                        scoreText = null,
-                    ),
-                    MatchEntity(
-                        id = 106L,
-                        tournamentId = 1L,
-                        courtId = null,
-                        roundName = "Extra",
-                        status = MatchStatus.SCHEDULED,
-                        manualNotBefore = now + 30 * 60_000L,
-                        computedNotBefore = null,
-                        startedAt = null,
-                        endedAt = null,
-                        winnerTeamId = null,
-                        initialLeftTeamId = null,
-                        initialRightTeamId = null,
-                        initialServerPlayerId = null,
-                        resultType = null,
-                        scoreText = null,
-                    ),
-                ),
-            )
+            val playerIdByName = playerEntities.associate { it.displayName to it.id }
+            val courtIdByName = courtEntities.associate { it.name to it.id }
+            val matchEntities = mutableListOf<MatchEntity>()
+            val slotEntities = mutableListOf<SlotEntity>()
+            val eventEntities = mutableListOf<EventLogEntity>()
+            var matchId = 100L
 
-            slotDao.insertAll(
-                listOf(
-                    SlotEntity(
-                        id = 1001L,
-                        matchId = 100L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 1L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1002L,
-                        matchId = 100L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 2L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1011L,
-                        matchId = 101L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 3L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1012L,
-                        matchId = 101L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 4L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1021L,
-                        matchId = 102L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 5L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1022L,
-                        matchId = 102L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 6L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1031L,
-                        matchId = 103L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.WINNER_OF_MATCH,
-                        directTeamId = null,
-                        winnerOfMatchId = 100L,
-                    ),
-                    SlotEntity(
-                        id = 1032L,
-                        matchId = 103L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 7L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1041L,
-                        matchId = 104L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.WINNER_OF_MATCH,
-                        directTeamId = null,
-                        winnerOfMatchId = 101L,
-                    ),
-                    SlotEntity(
-                        id = 1042L,
-                        matchId = 104L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 10L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1051L,
-                        matchId = 105L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.WINNER_OF_MATCH,
-                        directTeamId = null,
-                        winnerOfMatchId = 102L,
-                    ),
-                    SlotEntity(
-                        id = 1052L,
-                        matchId = 105L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 12L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1061L,
-                        matchId = 106L,
-                        position = SlotPosition.LEFT,
-                        slotType = SlotType.DIRECT_TEAM,
-                        directTeamId = 8L,
-                        winnerOfMatchId = null,
-                    ),
-                    SlotEntity(
-                        id = 1062L,
-                        matchId = 106L,
-                        position = SlotPosition.RIGHT,
-                        slotType = SlotType.BYE,
-                        directTeamId = null,
-                        winnerOfMatchId = null,
-                    ),
-                ),
-            )
+            seedMatches.forEach { seed ->
+                val currentMatchId = matchId++
+                val courtEntityId = courtIdByName.getValue(seed.courtName)
+                val leftTeamId = playerIdByName.getValue(seed.left.name)
+                val rightTeamId = playerIdByName.getValue(seed.right.name)
+                val isCompleted = seed.order == 1
+                val completedCourtOffset = courtEntityId - 1L
+                val startedAt = if (isCompleted) {
+                    now - (240L - completedCourtOffset * 6L) * 60_000L
+                } else {
+                    null
+                }
+                val endedAt = if (isCompleted) startedAt?.plus(35L * 60_000L) else null
+                val winnerTeamId = when (seed.winnerSide) {
+                    MatchWinnerSide.LEFT -> leftTeamId
+                    MatchWinnerSide.RIGHT -> rightTeamId
+                    null -> null
+                }
+                val manualNotBefore = when (seed.order) {
+                    2 -> now + 15L * 60_000L
+                    3 -> now + 90L * 60_000L
+                    4 -> now + 180L * 60_000L
+                    else -> null
+                }
 
-            eventLogDao.insertAll(
-                listOf(
-                    EventLogEntity(
-                        matchId = 100L,
-                        courtId = 1L,
-                        timestamp = now - 240 * 60_000L,
+                matchEntities += MatchEntity(
+                    id = currentMatchId,
+                    tournamentId = 1L,
+                    courtId = courtEntityId,
+                    roundName = when (seed.order) {
+                        1 -> "1. Starting at 09:00"
+                        2 -> "2. Followed By"
+                        3 -> "3. Not Before 11:30"
+                        else -> "4. Followed By"
+                    },
+                    status = if (isCompleted) MatchStatus.COMPLETED else MatchStatus.SCHEDULED,
+                    manualNotBefore = manualNotBefore,
+                    computedNotBefore = null,
+                    startedAt = startedAt,
+                    endedAt = endedAt,
+                    winnerTeamId = winnerTeamId,
+                    initialLeftTeamId = if (isCompleted) leftTeamId else null,
+                    initialRightTeamId = if (isCompleted) rightTeamId else null,
+                    initialServerPlayerId = if (isCompleted) leftTeamId else null,
+                    resultType = if (isCompleted) MatchResultTypeEntity.NORMAL else null,
+                    scoreText = seed.score,
+                )
+
+                slotEntities += SlotEntity(
+                    id = currentMatchId * 10L + 1L,
+                    matchId = currentMatchId,
+                    position = SlotPosition.LEFT,
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = leftTeamId,
+                    winnerOfMatchId = null,
+                )
+                slotEntities += SlotEntity(
+                    id = currentMatchId * 10L + 2L,
+                    matchId = currentMatchId,
+                    position = SlotPosition.RIGHT,
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = rightTeamId,
+                    winnerOfMatchId = null,
+                )
+
+                if (isCompleted) {
+                    val startedAtMillis = checkNotNull(startedAt)
+                    val endedAtMillis = checkNotNull(endedAt)
+                    eventEntities += EventLogEntity(
+                        matchId = currentMatchId,
+                        courtId = courtEntityId,
+                        timestamp = startedAtMillis,
                         eventType = EventType.MATCH_STARTED,
                         offenderPlayerId = null,
                         message = "Match started",
-                    ),
-                    EventLogEntity(
-                        matchId = 100L,
-                        courtId = 1L,
-                        timestamp = now - 210 * 60_000L,
+                    )
+                    eventEntities += EventLogEntity(
+                        matchId = currentMatchId,
+                        courtId = courtEntityId,
+                        timestamp = endedAtMillis,
                         eventType = EventType.MATCH_ENDED,
                         offenderPlayerId = null,
-                        message = "Final score 3-6 3-6",
-                    ),
-                    EventLogEntity(
-                        matchId = 101L,
-                        courtId = 2L,
-                        timestamp = now - 230 * 60_000L,
-                        eventType = EventType.MATCH_STARTED,
-                        offenderPlayerId = null,
-                        message = "Match started",
-                    ),
-                    EventLogEntity(
-                        matchId = 101L,
-                        courtId = 2L,
-                        timestamp = now - 200 * 60_000L,
-                        eventType = EventType.MATCH_ENDED,
-                        offenderPlayerId = null,
-                        message = "Final score 6-2 6-4",
-                    ),
-                    EventLogEntity(
-                        matchId = 102L,
-                        courtId = 3L,
-                        timestamp = now - 220 * 60_000L,
-                        eventType = EventType.MATCH_STARTED,
-                        offenderPlayerId = null,
-                        message = "Match started",
-                    ),
-                    EventLogEntity(
-                        matchId = 102L,
-                        courtId = 3L,
-                        timestamp = now - 190 * 60_000L,
-                        eventType = EventType.MATCH_ENDED,
-                        offenderPlayerId = null,
-                        message = "Final score 6-1 6-0",
-                    ),
-                ),
-            )
+                        message = "Final score ${seed.score}",
+                    )
+                }
+            }
+
+            matchDao.insertAll(matchEntities)
+            slotDao.insertAll(slotEntities)
+            eventLogDao.insertAll(eventEntities)
         }
 
         recomputeNotBeforeAndSchedule()
@@ -458,6 +293,7 @@ class AppRepository @Inject constructor(
                 PlayerSummary(
                     id = player.id,
                     displayName = player.displayName,
+                    countryCode = player.countryCode,
                     restMinutes = player.restMinutes,
                 )
             }
@@ -590,7 +426,9 @@ class AppRepository @Inject constructor(
                     rightSide = null,
                     computedNotBeforeMillis = null,
                     startedAtMillis = null,
+                    endedAtMillis = null,
                     initialServerPlayerId = null,
+                    winnerTeamId = null,
                     canSwapSides = false,
                     canStartMatch = false,
                     scoreText = null,
@@ -610,7 +448,9 @@ class AppRepository @Inject constructor(
                     rightSide = right,
                     computedNotBeforeMillis = computeNotBefore(currentMatch, context),
                     startedAtMillis = currentMatch.startedAt,
+                    endedAtMillis = currentMatch.endedAt,
                     initialServerPlayerId = currentMatch.initialServerPlayerId,
+                    winnerTeamId = currentMatch.winnerTeamId,
                     canSwapSides = currentMatch.status == MatchStatus.SCHEDULED,
                     canStartMatch = canStart,
                     scoreText = currentMatch.scoreText,
@@ -772,6 +612,10 @@ class AppRepository @Inject constructor(
                 }
             }
             val decision = applyViolationUseCase.apply(currentCounts, category)
+            val offenderName = playerDao.getAll()
+                .firstOrNull { it.id == offenderPlayerId }
+                ?.displayName
+                ?: "Player $offenderPlayerId"
             eventLogDao.insert(
                 EventLogEntity(
                     matchId = matchId,
@@ -784,7 +628,7 @@ class AppRepository @Inject constructor(
             )
             ApplyViolationResult(
                 guidance = decision.guidance,
-                summary = "Applied: $violationName to player #$offenderPlayerId",
+                summary = "Applied: $violationName to $offenderName",
             )
         }
     }
@@ -964,7 +808,7 @@ class AppRepository @Inject constructor(
             SlotType.DIRECT_TEAM -> {
                 val teamId = slot.directTeamId
                 val players = teamId?.let { context.teamPlayersByTeam[it].orEmpty() }.orEmpty().map {
-                    PlayerRef(playerId = it.id, name = it.displayName)
+                    PlayerRef(playerId = it.id, name = it.displayName, countryCode = it.countryCode)
                 }
                 SideParticipant(
                     slotId = slot.id,
@@ -986,7 +830,7 @@ class AppRepository @Inject constructor(
                 val players = resolution.resolvedTeamId?.let { context.teamPlayersByTeam[it].orEmpty() }
                     .orEmpty()
                     .map {
-                    PlayerRef(playerId = it.id, name = it.displayName)
+                    PlayerRef(playerId = it.id, name = it.displayName, countryCode = it.countryCode)
                 }
                 SideParticipant(
                     slotId = slot.id,

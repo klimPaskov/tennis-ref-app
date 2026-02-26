@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.klim.tennisrefapp.data.timer.CourtTimerManager
 import com.klim.tennisrefapp.data.timer.CourtTimerState
+import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
@@ -60,6 +61,7 @@ class CourtDetailViewModel @Inject constructor(
     private val courtId: Long = checkNotNull(savedStateHandle.get<Long>("courtId"))
     private val selectedServerPlayerId = MutableStateFlow<Long?>(null)
     private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
+    private var warmupCompletedForMatchId: Long? = null
 
     private val detailFlow: Flow<CourtDetail?> = courtRepository.observeCourtDetail(courtId)
 
@@ -98,6 +100,7 @@ class CourtDetailViewModel @Inject constructor(
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
         }
         val currentSelection = when {
+            detail?.status == CourtStatus.COMPLETED -> null
             detail?.initialServerPlayerId != null -> detail.initialServerPlayerId
             selectedServer in allowedServerIds -> selectedServer
             else -> null
@@ -117,6 +120,17 @@ class CourtDetailViewModel @Inject constructor(
         initialValue = CourtDetailUiState(),
     )
 
+    init {
+        viewModelScope.launch {
+            combine(detailFlow, selectedServerPlayerId, timerFlow) { detail, selectedServer, timer ->
+                Triple(detail, selectedServer, timer)
+            }.collect { (detail, selectedServer, timer) ->
+                maybeStartWarmup(detail, selectedServer, timer)
+                maybeAutoStartAfterWarmup(detail, selectedServer, timer)
+            }
+        }
+    }
+
     fun onSelectServer(playerId: Long) {
         val detail = uiState.value.detail ?: return
         if (!detail.canStartMatch) return
@@ -127,6 +141,8 @@ class CourtDetailViewModel @Inject constructor(
         val matchId = uiState.value.detail?.matchId ?: return
         viewModelScope.launch {
             matchRepository.swapSides(matchId)
+            timerManager.stop(courtId)
+            warmupCompletedForMatchId = null
             selectedServerPlayerId.value = null
             feedbackMessage.value = null
         }
@@ -146,6 +162,8 @@ class CourtDetailViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            warmupCompletedForMatchId = matchId
+            timerManager.stop(detail.courtId)
             val result = matchRepository.startMatch(
                 matchId = matchId,
                 initialServerPlayerId = selectedServer,
@@ -160,35 +178,21 @@ class CourtDetailViewModel @Inject constructor(
         }
     }
 
-    fun onToggleTimer() {
+    fun onStartTimer(timerType: CourtTimerType) {
         val detail = uiState.value.detail ?: return
         val matchId = detail.matchId ?: return
         if (detail.status != CourtStatus.IN_PROGRESS) return
+        timerManager.startOrRestart(
+            courtId = detail.courtId,
+            matchId = matchId,
+            courtName = detail.courtName,
+            timerType = timerType,
+        )
+    }
 
-        val running = uiState.value.timerState?.isRunning == true
-        if (running) {
-            timerManager.stop(detail.courtId)
-            viewModelScope.launch {
-                eventLogRepository.logEvent(
-                    matchId = matchId,
-                    courtId = detail.courtId,
-                    kind = MatchEventKind.TIMER,
-                    offenderPlayerId = null,
-                    message = "TIMER|STOPPED",
-                )
-            }
-        } else {
-            timerManager.startOrRestart(detail.courtId, matchId, detail.courtName)
-            viewModelScope.launch {
-                eventLogRepository.logEvent(
-                    matchId = matchId,
-                    courtId = detail.courtId,
-                    kind = MatchEventKind.TIMER,
-                    offenderPlayerId = null,
-                    message = "TIMER|STARTED",
-                )
-            }
-        }
+    fun onStopTimer() {
+        val detail = uiState.value.detail ?: return
+        timerManager.stop(detail.courtId)
     }
 
     fun onApplyViolation(offenderPlayerId: Long, category: ViolationCategory, violationName: String) {
@@ -259,6 +263,55 @@ class CourtDetailViewModel @Inject constructor(
 
     fun clearFeedback() {
         feedbackMessage.value = null
+    }
+
+    private suspend fun maybeStartWarmup(
+        detail: CourtDetail?,
+        selectedServer: Long?,
+        timerState: CourtTimerState?,
+    ) {
+        val match = detail ?: return
+        val matchId = match.matchId ?: return
+        if (match.status != CourtStatus.SCHEDULED) return
+        if (!match.canStartMatch || selectedServer == null) return
+        if (warmupCompletedForMatchId == matchId) return
+        if (timerState?.timerType == CourtTimerType.WARMUP) return
+
+        timerManager.startOrRestart(
+            courtId = match.courtId,
+            matchId = matchId,
+            courtName = match.courtName,
+            timerType = CourtTimerType.WARMUP,
+        )
+        feedbackMessage.value = UiFeedback("Warm-up timer started.")
+    }
+
+    private suspend fun maybeAutoStartAfterWarmup(
+        detail: CourtDetail?,
+        selectedServer: Long?,
+        timerState: CourtTimerState?,
+    ) {
+        val match = detail ?: return
+        val matchId = match.matchId ?: return
+        if (match.status != CourtStatus.SCHEDULED) return
+        if (selectedServer == null) return
+        if (timerState?.timerType != CourtTimerType.WARMUP) return
+        if (timerState.isRunning || timerState.remainingMillis > 0) return
+        if (warmupCompletedForMatchId == matchId) return
+
+        warmupCompletedForMatchId = matchId
+        val result = matchRepository.startMatch(
+            matchId = matchId,
+            initialServerPlayerId = selectedServer,
+        )
+        feedbackMessage.value = when (result) {
+            StartMatchResult.Success -> UiFeedback("Warm-up finished. Match started.")
+            StartMatchResult.MatchNotFound -> UiFeedback("Match not found")
+            StartMatchResult.MissingResolvedParticipants -> UiFeedback("Participants are not resolved")
+            StartMatchResult.InvalidInitialServer -> UiFeedback("Selected server is invalid")
+            StartMatchResult.InvalidMatchState -> UiFeedback("Only scheduled matches can be started")
+        }
+        timerManager.stop(match.courtId)
     }
 
     private fun inferResultType(scoreText: String): MatchResultType {

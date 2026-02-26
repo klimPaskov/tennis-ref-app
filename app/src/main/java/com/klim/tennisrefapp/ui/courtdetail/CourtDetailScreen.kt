@@ -6,6 +6,7 @@ import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -47,13 +50,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.klim.tennisrefapp.data.timer.CourtTimerState
+import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.PlayerRef
@@ -80,6 +86,15 @@ private val commonViolations = listOf(
     ViolationTemplate("Best efforts", ViolationCategory.CODE),
     ViolationTemplate("Time violation (server)", ViolationCategory.TIME_SERVER),
     ViolationTemplate("Time violation (receiver)", ViolationCategory.TIME_RECEIVER),
+)
+
+private val inProgressTimers = listOf(
+    CourtTimerType.SIDE_SWITCH,
+    CourtTimerType.SET_BREAK,
+    CourtTimerType.TOILET_BREAK,
+    CourtTimerType.OFF_COURT,
+    CourtTimerType.MEDICAL_TIMEOUT,
+    CourtTimerType.EQUIPMENT_FIX,
 )
 
 @Composable
@@ -109,8 +124,9 @@ fun CourtDetailRoute(
         onBack = onBack,
         onSelectServer = viewModel::onSelectServer,
         onSwapSides = viewModel::onSwapSides,
-        onStartMatch = viewModel::onStartMatch,
-        onToggleTimer = viewModel::onToggleTimer,
+        onStartMatchNow = viewModel::onStartMatch,
+        onStartTimer = viewModel::onStartTimer,
+        onStopTimer = viewModel::onStopTimer,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
         onMoveMatchToCourt = viewModel::onMoveMatchToCourt,
@@ -127,8 +143,9 @@ private fun CourtDetailScreen(
     onBack: () -> Unit,
     onSelectServer: (Long) -> Unit,
     onSwapSides: () -> Unit,
-    onStartMatch: () -> Unit,
-    onToggleTimer: () -> Unit,
+    onStartMatchNow: () -> Unit,
+    onStartTimer: (CourtTimerType) -> Unit,
+    onStopTimer: () -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
     onMoveMatchToCourt: (Long?) -> Unit,
@@ -141,6 +158,7 @@ private fun CourtDetailScreen(
     var showScoreDialog by remember { mutableStateOf(false) }
     var showMoveDialog by remember { mutableStateOf(false) }
     var showSwapDialog by remember { mutableStateOf(false) }
+    var showTimerDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -163,17 +181,14 @@ private fun CourtDetailScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (detail == null) {
-                Text(text = "Loading...")
+                Text("Loading...")
                 return@Column
             }
 
             MatchHeader(detail = detail)
 
             if (detail.matchId == null) {
-                Text(
-                    text = "No match assigned to this court.",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                Text("No match assigned to this court.", style = MaterialTheme.typography.bodyLarge)
                 return@Column
             }
 
@@ -186,20 +201,18 @@ private fun CourtDetailScreen(
 
             when (detail.status) {
                 CourtStatus.SCHEDULED -> {
-                    Button(
-                        onClick = onStartMatch,
-                        enabled = detail.canStartMatch && uiState.selectedServerPlayerId != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = "Start Match")
-                    }
+                    ScheduledActions(
+                        selectedServerPlayerId = uiState.selectedServerPlayerId,
+                        timerState = uiState.timerState,
+                        onStartMatchNow = onStartMatchNow,
+                    )
                 }
 
                 CourtStatus.IN_PROGRESS -> {
                     InProgressActions(
                         timerState = uiState.timerState,
                         totalViolationCount = totalViolationCount(uiState.violationCountsByPlayer),
-                        onToggleTimer = onToggleTimer,
+                        onOpenTimer = { showTimerDialog = true },
                         onOpenViolations = { showViolationDialog = true },
                         onOpenFinalScore = { showScoreDialog = true },
                         onUndoViolation = onUndoViolation,
@@ -213,6 +226,21 @@ private fun CourtDetailScreen(
                 -> Unit
             }
         }
+    }
+
+    if (showTimerDialog && detail != null) {
+        TimerDialog(
+            timerState = uiState.timerState,
+            onDismiss = { showTimerDialog = false },
+            onStart = { timerType ->
+                onStartTimer(timerType)
+                showTimerDialog = false
+            },
+            onStop = {
+                onStopTimer()
+                showTimerDialog = false
+            },
+        )
     }
 
     if (showViolationDialog && detail != null) {
@@ -269,18 +297,42 @@ private fun MatchHeader(detail: CourtDetail) {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
+
         detail.computedNotBeforeMillis?.let { notBefore ->
-            Text(
-                text = "Not before ${formatTime(notBefore)}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
         }
-        if (!detail.scoreText.isNullOrBlank()) {
-            Text(
-                text = "${detail.resultType ?: "NORMAL"} · ${detail.scoreText}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+
+        val scoreLabel = buildScoreLabel(detail.scoreText, detail.resultType)
+        if (!scoreLabel.isNullOrBlank()) {
+            Text(scoreLabel, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         }
+
+        val durationLabel = matchDurationLabel(detail.startedAtMillis, detail.endedAtMillis)
+        if (durationLabel != null) {
+            Text(durationLabel, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ScheduledActions(
+    selectedServerPlayerId: Long?,
+    timerState: CourtTimerState?,
+    onStartMatchNow: () -> Unit,
+) {
+    if (selectedServerPlayerId == null) {
+        Text("Select the first server to start warm-up.", style = MaterialTheme.typography.bodyMedium)
+    } else if (timerState?.timerType == CourtTimerType.WARMUP) {
+        val warmupText = if (timerState.isRunning) {
+            "Warm-up: ${formatRemaining(timerState.remainingMillis)}"
+        } else {
+            "Warm-up complete"
+        }
+        Text(warmupText, style = MaterialTheme.typography.bodyMedium)
+    }
+
+    Button(onClick = onStartMatchNow, modifier = Modifier.fillMaxWidth(), enabled = selectedServerPlayerId != null) {
+        Text("Start Match Now")
     }
 }
 
@@ -302,16 +354,14 @@ private fun SidePanels(
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
             onSelectServer = onSelectServer,
+            isWinner = detail.status == CourtStatus.COMPLETED && detail.leftSide?.resolvedTeamId == detail.winnerTeamId,
         )
         FilledTonalIconButton(
             onClick = onSwapSides,
             enabled = detail.canSwapSides,
             modifier = Modifier.size(34.dp),
         ) {
-            Icon(
-                imageVector = Icons.Outlined.SwapHoriz,
-                contentDescription = "Swap sides",
-            )
+            Icon(Icons.Outlined.SwapHoriz, contentDescription = "Swap sides")
         }
         ParticipantSideCard(
             modifier = Modifier.weight(1f),
@@ -319,6 +369,7 @@ private fun SidePanels(
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
             onSelectServer = onSelectServer,
+            isWinner = detail.status == CourtStatus.COMPLETED && detail.rightSide?.resolvedTeamId == detail.winnerTeamId,
         )
     }
 }
@@ -327,7 +378,7 @@ private fun SidePanels(
 private fun InProgressActions(
     timerState: CourtTimerState?,
     totalViolationCount: Int,
-    onToggleTimer: () -> Unit,
+    onOpenTimer: () -> Unit,
     onOpenViolations: () -> Unit,
     onOpenFinalScore: () -> Unit,
     onUndoViolation: () -> Unit,
@@ -339,16 +390,10 @@ private fun InProgressActions(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedButton(
-            onClick = onToggleTimer,
-            modifier = Modifier.weight(1f),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Timer,
-                contentDescription = null,
-            )
+        OutlinedButton(onClick = onOpenTimer, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Outlined.Timer, contentDescription = null)
             Text(
-                text = if (timerState?.isRunning == true) " Timer running" else " Timer",
+                text = " ${timerButtonLabel(timerState)}",
                 style = MaterialTheme.typography.labelLarge,
             )
         }
@@ -359,51 +404,80 @@ private fun InProgressActions(
                 }
             },
         ) {
-            FilledTonalIconButton(
-                onClick = onOpenViolations,
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.WarningAmber,
-                    contentDescription = "Violations",
-                )
+            FilledTonalIconButton(onClick = onOpenViolations, modifier = Modifier.size(34.dp)) {
+                Icon(Icons.Outlined.WarningAmber, contentDescription = "Violations")
             }
         }
-        FilledTonalIconButton(
-            onClick = onUndoViolation,
-            modifier = Modifier.size(34.dp),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.Undo,
-                contentDescription = "Undo last violation",
-            )
+        FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
         }
     }
 
-    Button(
-        onClick = onOpenFinalScore,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    Button(onClick = onOpenFinalScore, modifier = Modifier.fillMaxWidth()) {
         Text("Set Winner and Score")
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        OutlinedButton(
-            onClick = onOpenMove,
-            modifier = Modifier.weight(1f),
-        ) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onOpenMove, modifier = Modifier.weight(1f)) {
             Text("Move")
         }
-        OutlinedButton(
-            onClick = onOpenSwapCourt,
-            modifier = Modifier.weight(1f),
-        ) {
+        OutlinedButton(onClick = onOpenSwapCourt, modifier = Modifier.weight(1f)) {
             Text("Swap Court")
         }
     }
+}
+
+@Composable
+private fun TimerDialog(
+    timerState: CourtTimerState?,
+    onDismiss: () -> Unit,
+    onStart: (CourtTimerType) -> Unit,
+    onStop: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Match Timers") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (timerState != null) {
+                    Card {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column {
+                                Text(timerState.timerType.label, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (timerState.isRunning) formatRemaining(timerState.remainingMillis) else "Completed",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            TextButton(onClick = onStop) {
+                                Text("Stop")
+                            }
+                        }
+                    }
+                }
+
+                Text("Start timer", style = MaterialTheme.typography.titleSmall)
+                inProgressTimers.forEach { timerType ->
+                    TextButton(onClick = { onStart(timerType) }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.Schedule, contentDescription = null)
+                        Text(
+                            text = " ${timerType.label} (${formatRemaining(timerType.durationMillis)})",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
 
 @Composable
@@ -418,6 +492,7 @@ private fun ViolationDialog(
         addAll(detail.rightSide?.players.orEmpty())
     }
     var selectedPlayerId by remember { mutableStateOf(players.firstOrNull()?.playerId) }
+    val selectedCounts = countsByPlayer[selectedPlayerId] ?: ViolationCounts()
     val playersWithViolations = players.mapNotNull { player ->
         val counts = countsByPlayer[player.playerId] ?: return@mapNotNull null
         val total = counts.codeViolationCount + counts.timeViolationCountServer + counts.timeViolationCountReceiver
@@ -436,7 +511,7 @@ private fun ViolationDialog(
                     Text("Current counts", style = MaterialTheme.typography.titleSmall)
                     playersWithViolations.forEach { (player, counts) ->
                         Text(
-                            text = "${player.name}: Code ${counts.codeViolationCount}, Server TV ${counts.timeViolationCountServer}, Receiver TV ${counts.timeViolationCountReceiver}",
+                            text = "${displayPlayerLabel(player)}: Code ${counts.codeViolationCount}, Server TV ${counts.timeViolationCountServer}, Receiver TV ${counts.timeViolationCountReceiver}",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -448,28 +523,44 @@ private fun ViolationDialog(
                         onClick = { selectedPlayerId = player.playerId },
                         modifier = Modifier.fillMaxWidth(),
                         colors = if (selectedPlayerId == player.playerId) {
-                            ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            )
+                            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                         } else {
                             ButtonDefaults.outlinedButtonColors()
                         },
                     ) {
-                        Text(player.name)
+                        Text(displayPlayerLabel(player))
                     }
                 }
 
                 Text("Apply", style = MaterialTheme.typography.titleSmall)
                 commonViolations.forEach { violation ->
-                    TextButton(
-                        onClick = {
-                            val offender = selectedPlayerId ?: return@TextButton
-                            onApplyViolation(offender, violation.category, violation.name)
-                            onDismiss()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(violation.name, textAlign = TextAlign.Start, modifier = Modifier.fillMaxWidth())
+                    val count = categoryCount(selectedCounts, violation.category)
+                    val offenceNumber = count + 1
+                    val appliedPenalty = penaltyForOffence(offenceNumber)
+                    val nextPenalty = penaltyForOffence(offenceNumber + 1)
+
+                    Card {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(violation.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(
+                                "This offence #$offenceNumber: $appliedPenalty. Next: $nextPenalty.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            TextButton(
+                                onClick = {
+                                    val offender = selectedPlayerId ?: return@TextButton
+                                    onApplyViolation(offender, violation.category, violation.name)
+                                    onDismiss()
+                                },
+                            ) {
+                                Text("Apply to selected player")
+                            }
+                        }
                     }
                 }
             }
@@ -496,35 +587,28 @@ private fun FinalScoreDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Winner", style = MaterialTheme.typography.titleSmall)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = { winner = MatchWinnerSide.LEFT },
                         modifier = Modifier.weight(1f),
                         colors = if (winner == MatchWinnerSide.LEFT) {
-                            ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            )
+                            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                         } else {
                             ButtonDefaults.outlinedButtonColors()
                         },
                     ) {
-                        Text(leftName)
+                        Text(leftName, textAlign = TextAlign.Center)
                     }
                     OutlinedButton(
                         onClick = { winner = MatchWinnerSide.RIGHT },
                         modifier = Modifier.weight(1f),
                         colors = if (winner == MatchWinnerSide.RIGHT) {
-                            ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            )
+                            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                         } else {
                             ButtonDefaults.outlinedButtonColors()
                         },
                     ) {
-                        Text(rightName)
+                        Text(rightName, textAlign = TextAlign.Center)
                     }
                 }
 
@@ -536,27 +620,17 @@ private fun FinalScoreDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    text = "Leave score empty for walkover. Incomplete score (for example, 4:3) is saved as retirement.",
+                    "Leave empty for walkover. Incomplete score (example: 4:3) becomes retirement automatically.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TextButton(onClick = { scoreText = "6-4 6-3" }, modifier = Modifier.weight(1f)) {
-                        Text("6-4 6-3")
-                    }
-                    TextButton(onClick = { scoreText = "6-4 3-6 10-7" }, modifier = Modifier.weight(1f)) {
-                        Text("6-4 3-6 10-7")
-                    }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { scoreText = "6-4 6-3" }, modifier = Modifier.weight(1f)) { Text("6-4 6-3") }
+                    TextButton(onClick = { scoreText = "6-4 3-6 10-7" }, modifier = Modifier.weight(1f)) { Text("6-4 3-6 10-7") }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = { winner?.let { onSubmit(it, scoreText.trim()) } },
-                enabled = winner != null,
-            ) {
+            Button(onClick = { winner?.let { onSubmit(it, scoreText.trim()) } }, enabled = winner != null) {
                 Text("Save")
             }
         },
@@ -628,8 +702,12 @@ private fun ParticipantSideCard(
     selectedServerPlayerId: Long?,
     canSelectServer: Boolean,
     onSelectServer: (Long) -> Unit,
+    isWinner: Boolean,
 ) {
-    Card(modifier = modifier) {
+    val borderColor = if (isWinner) MaterialTheme.colorScheme.tertiary else Color.Transparent
+    Card(
+        modifier = modifier.background(borderColor, RoundedCornerShape(12.dp)),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -639,55 +717,92 @@ private fun ParticipantSideCard(
             val players = side?.players.orEmpty()
             if (players.isNotEmpty()) {
                 players.forEach { player ->
-                    val isSelected = player.playerId == selectedServerPlayerId
+                    val isSelectedServer = player.playerId == selectedServerPlayerId
+                    val backgroundColor = when {
+                        isWinner -> MaterialTheme.colorScheme.tertiaryContainer
+                        isSelectedServer -> MaterialTheme.colorScheme.primaryContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                color = if (isSelected) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant
-                                },
-                                shape = MaterialTheme.shapes.small,
-                            )
-                            .clickable(
-                                enabled = canSelectServer,
-                                onClick = { onSelectServer(player.playerId) },
-                            )
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .background(backgroundColor, MaterialTheme.shapes.small)
+                            .clickable(enabled = canSelectServer, onClick = { onSelectServer(player.playerId) })
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = player.name,
-                            style = MaterialTheme.typography.titleLarge,
+                            text = displayPlayerLabel(player),
+                            style = if (player.name.length > 24) {
+                                MaterialTheme.typography.titleMedium
+                            } else {
+                                MaterialTheme.typography.titleLarge
+                            },
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f),
+                            lineHeight = 24.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 2,
+                            textAlign = TextAlign.Center,
                         )
-                        if (isSelected) {
-                            Text(
-                                text = "Server",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                        }
                     }
                 }
             } else {
                 Text(
                     text = side?.label ?: "TBD",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
     }
 }
 
+private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
+    val score = scoreText?.trim().orEmpty()
+    return when (resultType) {
+        "RETIREMENT" -> if (score.isBlank()) "RET" else "$score RET"
+        "WALKOVER" -> if (score.isBlank()) "WO" else "$score WO"
+        "DEFAULT" -> if (score.isBlank()) "DEF" else "$score DEF"
+        else -> score.ifBlank { null }
+    }
+}
+
+private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): String? {
+    val started = startedAtMillis ?: return null
+    val ended = endedAtMillis ?: return null
+    val durationMs = (ended - started).coerceAtLeast(0L)
+    return "Played ${formatDuration(durationMs)}"
+}
+
+private fun formatDuration(durationMillis: Long): String {
+    val totalMinutes = durationMillis / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
+}
+
+private fun timerButtonLabel(timerState: CourtTimerState?): String {
+    if (timerState == null) return "Timers"
+    return if (timerState.isRunning) {
+        "${timerState.timerType.label} ${formatRemaining(timerState.remainingMillis)}"
+    } else {
+        "Timers"
+    }
+}
+
+private fun formatRemaining(remainingMillis: Long): String {
+    val totalSeconds = (remainingMillis / 1000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(minutes, seconds)
+}
+
 private fun sidePrimaryLabel(side: SideParticipant?): String {
     val players = side?.players.orEmpty()
     return if (players.isNotEmpty()) {
-        players.joinToString(" / ") { it.name }
+        players.joinToString(" / ") { displayPlayerLabel(it).replace('\n', ' ') }
     } else {
         side?.label ?: "TBD"
     }
@@ -698,6 +813,67 @@ private fun totalViolationCount(countsByPlayer: Map<Long, ViolationCounts>): Int
         counts.codeViolationCount + counts.timeViolationCountServer + counts.timeViolationCountReceiver
     }
 }
+
+private fun categoryCount(counts: ViolationCounts, category: ViolationCategory): Int {
+    return when (category) {
+        ViolationCategory.CODE -> counts.codeViolationCount
+        ViolationCategory.TIME_SERVER -> counts.timeViolationCountServer
+        ViolationCategory.TIME_RECEIVER -> counts.timeViolationCountReceiver
+    }
+}
+
+private fun penaltyForOffence(offenceNumber: Int): String {
+    return when {
+        offenceNumber <= 1 -> "Warning"
+        offenceNumber == 2 -> "Point Penalty"
+        offenceNumber == 3 -> "Game Penalty"
+        else -> "Default"
+    }
+}
+
+private fun displayPlayerLabel(player: PlayerRef): String {
+    val flag = countryCodeToFlagEmoji(player.countryCode)
+    val parts = player.name.trim().split(Regex("\\s+"), limit = 2)
+    val name = if (parts.size == 2) "${parts[0]}\n${parts[1]}" else player.name
+    return if (flag != null) "$flag $name" else name
+}
+
+private fun countryCodeToFlagEmoji(countryCode: String?): String? {
+    val normalized = countryCode?.trim()?.uppercase()?.ifBlank { null } ?: return null
+    val iso2 = if (normalized.length == 2) {
+        normalized
+    } else {
+        ISO3_TO_ISO2[normalized]
+    } ?: return null
+
+    if (iso2.length != 2 || !iso2.all { it in 'A'..'Z' }) return null
+    val first = Character.codePointAt(iso2, 0) - 0x41 + 0x1F1E6
+    val second = Character.codePointAt(iso2, 1) - 0x41 + 0x1F1E6
+    return String(Character.toChars(first)) + String(Character.toChars(second))
+}
+
+private val ISO3_TO_ISO2 = mapOf(
+    "BEL" to "BE",
+    "CHN" to "CN",
+    "CZE" to "CZ",
+    "DEN" to "DK",
+    "EST" to "EE",
+    "FIN" to "FI",
+    "GBR" to "GB",
+    "GER" to "DE",
+    "ISR" to "IL",
+    "ITA" to "IT",
+    "JPN" to "JP",
+    "LAT" to "LV",
+    "LIE" to "LI",
+    "LTU" to "LT",
+    "POL" to "PL",
+    "ROU" to "RO",
+    "SLO" to "SI",
+    "SUI" to "CH",
+    "SWE" to "SE",
+    "UKR" to "UA",
+)
 
 private fun statusLabel(status: CourtStatus): String {
     return when (status) {
@@ -717,19 +893,25 @@ private fun formatTime(timestamp: Long): String {
 @Composable
 private fun ParticipantSideCardPreview() {
     TennisRefTheme {
-        ParticipantSideCard(
-            modifier = Modifier.fillMaxWidth(),
-            side = SideParticipant(
-                slotId = 1,
-                label = "Alice",
-                players = listOf(PlayerRef(1, "Alice"), PlayerRef(2, "Bob")),
-                resolvedTeamId = 1,
-                isResolved = true,
-            ),
-            selectedServerPlayerId = 2,
-            canSelectServer = true,
-            onSelectServer = {},
-        )
+        Box(modifier = Modifier.padding(8.dp)) {
+            ParticipantSideCard(
+                modifier = Modifier.fillMaxWidth(),
+                side = SideParticipant(
+                    slotId = 1,
+                    label = "Player",
+                    players = listOf(
+                        PlayerRef(1, "Yiyuan Su", "CHN"),
+                        PlayerRef(2, "Vincent Fletcher", "GBR"),
+                    ),
+                    resolvedTeamId = 1,
+                    isResolved = true,
+                ),
+                selectedServerPlayerId = 2,
+                canSelectServer = true,
+                onSelectServer = {},
+                isWinner = false,
+            )
+        }
     }
 }
 
@@ -741,39 +923,50 @@ private fun CourtDetailScheduledPreview() {
             uiState = CourtDetailUiState(
                 detail = CourtDetail(
                     courtId = 1,
-                    courtName = "Court 1",
+                    courtName = "Court 2",
                     status = CourtStatus.SCHEDULED,
                     matchId = 101,
                     leftSide = SideParticipant(
                         slotId = 1,
-                        label = "Alice",
-                        players = listOf(PlayerRef(1, "Alice")),
+                        label = "Left",
+                        players = listOf(PlayerRef(1, "Hanna Vanni", "FIN")),
                         resolvedTeamId = 1,
                         isResolved = true,
                     ),
                     rightSide = SideParticipant(
                         slotId = 2,
-                        label = "Bob",
-                        players = listOf(PlayerRef(2, "Bob")),
+                        label = "Right",
+                        players = listOf(PlayerRef(2, "Vera Morozova", "EST")),
                         resolvedTeamId = 2,
                         isResolved = true,
                     ),
                     computedNotBeforeMillis = 1_700_000_000_000,
                     startedAtMillis = null,
+                    endedAtMillis = null,
                     initialServerPlayerId = null,
+                    winnerTeamId = null,
                     canSwapSides = true,
                     canStartMatch = true,
                     scoreText = null,
                     resultType = null,
                 ),
                 selectedServerPlayerId = 1,
-                availableCourts = listOf(1L to "Court 1", 2L to "Court 2"),
+                availableCourts = listOf(1L to "Court 2", 2L to "Court 3"),
+                timerState = CourtTimerState(
+                    courtId = 1,
+                    matchId = 101,
+                    courtName = "Court 2",
+                    timerType = CourtTimerType.WARMUP,
+                    remainingMillis = 120_000,
+                    isRunning = true,
+                ),
             ),
             onBack = {},
             onSelectServer = {},
             onSwapSides = {},
-            onStartMatch = {},
-            onToggleTimer = {},
+            onStartMatchNow = {},
+            onStartTimer = {},
+            onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
             onMoveMatchToCourt = {},
@@ -786,49 +979,46 @@ private fun CourtDetailScheduledPreview() {
 
 @Preview(showBackground = true, heightDp = 820)
 @Composable
-private fun CourtDetailInProgressPreview() {
+private fun CourtDetailCompletedPreview() {
     TennisRefTheme {
         CourtDetailScreen(
             uiState = CourtDetailUiState(
                 detail = CourtDetail(
-                    courtId = 2,
-                    courtName = "Court 2",
-                    status = CourtStatus.IN_PROGRESS,
-                    matchId = 102,
+                    courtId = 6,
+                    courtName = "Court 7",
+                    status = CourtStatus.COMPLETED,
+                    matchId = 120,
                     leftSide = SideParticipant(
-                        slotId = 3,
-                        label = "Carla",
-                        players = listOf(PlayerRef(3, "Carla")),
-                        resolvedTeamId = 3,
+                        slotId = 10,
+                        label = "Left",
+                        players = listOf(PlayerRef(10, "Edwin Averjanov", "EST")),
+                        resolvedTeamId = 10,
                         isResolved = true,
                     ),
                     rightSide = SideParticipant(
-                        slotId = 4,
-                        label = "Diego",
-                        players = listOf(PlayerRef(4, "Diego")),
-                        resolvedTeamId = 4,
+                        slotId = 11,
+                        label = "Right",
+                        players = listOf(PlayerRef(11, "Jan Sykora", "CZE")),
+                        resolvedTeamId = 11,
                         isResolved = true,
                     ),
                     computedNotBeforeMillis = null,
-                    startedAtMillis = 1_700_000_100_000,
-                    initialServerPlayerId = 3,
+                    startedAtMillis = 1_700_000_000_000,
+                    endedAtMillis = 1_700_002_100_000,
+                    initialServerPlayerId = 10,
+                    winnerTeamId = 11,
                     canSwapSides = false,
                     canStartMatch = false,
-                    scoreText = null,
-                    resultType = null,
-                ),
-                selectedServerPlayerId = 3,
-                availableCourts = listOf(1L to "Court 1", 2L to "Court 2", 3L to "Court 3"),
-                violationCountsByPlayer = mapOf(
-                    3L to ViolationCounts(codeViolationCount = 1),
-                    4L to ViolationCounts(timeViolationCountServer = 1),
+                    scoreText = "4-6 3-6",
+                    resultType = "NORMAL",
                 ),
             ),
             onBack = {},
             onSelectServer = {},
             onSwapSides = {},
-            onStartMatch = {},
-            onToggleTimer = {},
+            onStartMatchNow = {},
+            onStartTimer = {},
+            onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
             onMoveMatchToCourt = {},

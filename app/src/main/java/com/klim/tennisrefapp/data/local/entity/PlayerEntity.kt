@@ -21,5 +21,6 @@ data class PlayerEntity(
     @PrimaryKey val id: Long,
     val tournamentId: Long,
     val displayName: String,
+    val countryCode: String?,
     val restMinutes: Int?,
 )

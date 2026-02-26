@@ -10,6 +10,7 @@ enum class CourtStatus {
 data class PlayerRef(
     val playerId: Long,
     val name: String,
+    val countryCode: String?,
 )
 
 data class SideParticipant(
@@ -38,7 +39,9 @@ data class CourtDetail(
     val rightSide: SideParticipant?,
     val computedNotBeforeMillis: Long?,
     val startedAtMillis: Long?,
+    val endedAtMillis: Long?,
     val initialServerPlayerId: Long?,
+    val winnerTeamId: Long?,
     val canSwapSides: Boolean,
     val canStartMatch: Boolean,
     val scoreText: String?,
