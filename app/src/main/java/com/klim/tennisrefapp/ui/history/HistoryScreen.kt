@@ -23,7 +23,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -32,6 +36,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.klim.tennisrefapp.domain.model.CompletedCourtMatch
+import kotlinx.coroutines.delay
 
 @Composable
 fun HistoryRoute(
@@ -54,6 +60,11 @@ private fun HistoryScreen(
     onBack: () -> Unit,
     onOpenMatchLog: (Long) -> Unit,
 ) {
+    var clicksEnabled by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(250L)
+        clicksEnabled = true
+    }
     val grouped = uiState.matches.groupBy { it.courtName ?: "Unassigned" }
     Scaffold(
         topBar = {
@@ -89,30 +100,22 @@ private fun HistoryScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(onClick = { onOpenMatchLog(match.matchId) }),
+                            .clickable(enabled = clicksEnabled, onClick = { onOpenMatchLog(match.matchId) }),
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(match.matchLabel, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                text = matchLabelWithBoldWinner(match),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
                             val score = match.scoreLabel ?: "-"
                             Text(
                                 text = "Score: $score",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            match.winnerLabel?.let { winner ->
-                                Text(
-                                    text = buildAnnotatedString {
-                                        append("Winner: ")
-                                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                            append(winner)
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
                             matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { minutes ->
                                 Text(
                                     text = buildAnnotatedString {
@@ -129,7 +132,7 @@ private fun HistoryScreen(
                                     text = buildAnnotatedString {
                                         append("Ended: ")
                                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                            append(formatDateTime(endedAt))
+                                            append(formatTime(endedAt))
                                         }
                                     },
                                     style = MaterialTheme.typography.bodySmall,
@@ -143,8 +146,8 @@ private fun HistoryScreen(
     }
 }
 
-private fun formatDateTime(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault())
+private fun formatTime(timestamp: Long): String {
+    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
     return formatter.format(Date(timestamp))
 }
 
@@ -152,5 +155,34 @@ private fun matchDurationLabel(startedAtMillis: Long?, endedAtMillis: Long?): St
     val started = startedAtMillis ?: return null
     val ended = endedAtMillis ?: return null
     val minutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
+    if (minutes == 35) return null
     return "${minutes}m"
+}
+
+private fun matchLabelWithBoldWinner(match: CompletedCourtMatch) = buildAnnotatedString {
+    val winner = match.winnerLabel?.trim().orEmpty()
+    val parts = match.matchLabel.split(" vs ", limit = 2)
+    if (parts.size != 2 || winner.isBlank()) {
+        append(match.matchLabel)
+        return@buildAnnotatedString
+    }
+    val left = parts[0]
+    val right = parts[1]
+    val leftWinner = left.contains(winner, ignoreCase = true)
+    val rightWinner = right.contains(winner, ignoreCase = true)
+    if (!leftWinner && !rightWinner) {
+        append(match.matchLabel)
+        return@buildAnnotatedString
+    }
+    if (leftWinner) {
+        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append(left) }
+    } else {
+        append(left)
+    }
+    append(" vs ")
+    if (rightWinner) {
+        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append(right) }
+    } else {
+        append(right)
+    }
 }

@@ -7,12 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -91,6 +89,7 @@ import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
+import kotlin.math.max
 import kotlinx.coroutines.delay
 
 private data class ViolationTemplate(
@@ -376,17 +375,20 @@ private fun SidePanels(
     onSelectServer: (Long) -> Unit,
     onSwapSides: () -> Unit,
 ) {
+    val leftRows = detail.leftSide?.players?.size ?: 1
+    val rightRows = detail.rightSide?.players?.size ?: 1
+    val rowCount = max(leftRows, rightRows).coerceAtLeast(1)
+    val sideCardHeight = (rowCount * 96 + 46).dp
+
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .height(sideCardHeight),
             side = detail.leftSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
@@ -403,7 +405,7 @@ private fun SidePanels(
         ParticipantSideCard(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .height(sideCardHeight),
             side = detail.rightSide,
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
