@@ -29,10 +29,14 @@ class HomeViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
-            tournamentRepository.reloadOrderOfPlay()
+            val imported = tournamentRepository.reloadOrderOfPlayFromFile(uriString)
             _uiState.value = HomeUiState(
                 isReloading = false,
-                message = "New order of play loaded from selected file.",
+                message = if (imported) {
+                    "New order of play loaded from selected file."
+                } else {
+                    "Could not parse order of play file."
+                },
             )
         }
     }

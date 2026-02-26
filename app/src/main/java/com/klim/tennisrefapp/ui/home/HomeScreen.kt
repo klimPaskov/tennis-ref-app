@@ -59,7 +59,7 @@ fun HomeRoute(
         uiState = uiState,
         onContinue = onContinue,
         onReload = {
-            pickOrderOfPlayLauncher.launch(arrayOf("application/pdf", "application/octet-stream"))
+            pickOrderOfPlayLauncher.launch(arrayOf("application/pdf", "text/plain", "*/*"))
         },
         onPlayers = onPlayers,
         onHistory = onHistory,

@@ -1,5 +1,7 @@
 package com.klim.tennisrefapp.data.repository
 
+import android.content.Context
+import android.net.Uri
 import androidx.room.withTransaction
 import com.klim.tennisrefapp.data.local.AppDatabase
 import com.klim.tennisrefapp.data.local.dao.CourtDao
@@ -66,6 +68,10 @@ import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.usecase.ApplyViolationUseCase
 import com.klim.tennisrefapp.domain.usecase.ComputeNotBeforeUseCase
 import com.klim.tennisrefapp.domain.usecase.ResolveSlotUseCase
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +82,8 @@ import kotlinx.coroutines.withContext
 
 @Singleton
 class AppRepository @Inject constructor(
+    @ApplicationContext
+    private val appContext: Context,
     private val database: AppDatabase,
     private val tournamentDao: TournamentDao,
     private val courtDao: CourtDao,
@@ -305,6 +313,118 @@ class AppRepository @Inject constructor(
             database.clearAllTables()
         }
         seedIfEmpty()
+    }
+
+    override suspend fun reloadOrderOfPlayFromFile(uriString: String): Boolean {
+        val imported = parseOrderOfPlayFromUri(uriString) ?: return false
+        if (imported.matches.isEmpty()) return false
+
+        withContext(Dispatchers.IO) {
+            database.clearAllTables()
+        }
+
+        val now = System.currentTimeMillis()
+        database.withTransaction {
+            tournamentDao.insert(
+                TournamentEntity(
+                    id = 1L,
+                    name = imported.tournamentName,
+                    defaultRestMinutes = DEFAULT_REST_MINUTES,
+                    createdAt = now,
+                ),
+            )
+
+            val courtEntities = imported.courts.mapIndexed { index, name ->
+                CourtEntity(
+                    id = (index + 1).toLong(),
+                    tournamentId = 1L,
+                    name = name,
+                    sortOrder = index + 1,
+                )
+            }
+            courtDao.insertAll(courtEntities)
+            val courtIdByName = courtEntities.associate { it.name to it.id }
+
+            val entrants = imported.matches
+                .flatMap { listOf(it.left, it.right) }
+                .distinctBy { it.name }
+            val players = entrants.mapIndexed { index, entrant ->
+                PlayerEntity(
+                    id = (index + 1).toLong(),
+                    tournamentId = 1L,
+                    displayName = entrant.name,
+                    countryCode = entrant.countryCode,
+                    restMinutes = DEFAULT_REST_MINUTES,
+                )
+            }
+            playerDao.insertAll(players)
+            teamDao.insertAll(
+                players.map { player ->
+                    TeamEntity(
+                        id = player.id,
+                        tournamentId = player.tournamentId,
+                        name = null,
+                    )
+                },
+            )
+            teamPlayerDao.insertAll(
+                players.map { player ->
+                    TeamPlayerCrossRefEntity(
+                        teamId = player.id,
+                        playerId = player.id,
+                        playerOrder = 0,
+                    )
+                },
+            )
+
+            val playerIdByName = players.associate { it.displayName to it.id }
+            val matchEntities = mutableListOf<MatchEntity>()
+            val slotEntities = mutableListOf<SlotEntity>()
+            var matchId = 100L
+            imported.matches.forEach { importedMatch ->
+                val currentMatchId = matchId++
+                val leftTeamId = playerIdByName[importedMatch.left.name] ?: return@forEach
+                val rightTeamId = playerIdByName[importedMatch.right.name] ?: return@forEach
+                matchEntities += MatchEntity(
+                    id = currentMatchId,
+                    tournamentId = 1L,
+                    courtId = courtIdByName[importedMatch.courtName],
+                    roundName = "${importedMatch.order}. ${importedMatch.scheduleLabel}",
+                    status = MatchStatus.SCHEDULED,
+                    manualNotBefore = importedMatch.manualNotBefore,
+                    computedNotBefore = null,
+                    startedAt = null,
+                    endedAt = null,
+                    winnerTeamId = null,
+                    initialLeftTeamId = null,
+                    initialRightTeamId = null,
+                    initialServerPlayerId = null,
+                    resultType = null,
+                    scoreText = null,
+                )
+                slotEntities += SlotEntity(
+                    id = currentMatchId * 10L + 1L,
+                    matchId = currentMatchId,
+                    position = SlotPosition.LEFT,
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = leftTeamId,
+                    winnerOfMatchId = null,
+                )
+                slotEntities += SlotEntity(
+                    id = currentMatchId * 10L + 2L,
+                    matchId = currentMatchId,
+                    position = SlotPosition.RIGHT,
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = rightTeamId,
+                    winnerOfMatchId = null,
+                )
+            }
+            matchDao.insertAll(matchEntities)
+            slotDao.insertAll(slotEntities)
+        }
+
+        recomputeNotBeforeAndSchedule()
+        return true
     }
 
     override fun observePlayers(): Flow<List<PlayerSummary>> {
@@ -1389,6 +1509,250 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private suspend fun parseOrderOfPlayFromUri(uriString: String): ImportedOrderDocument? {
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
+        val text = readOrderOfPlayText(uri) ?: return null
+        val lines = text
+            .replace('\u000C', '\n')
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        if (lines.isEmpty()) return null
+
+        val courts = extractCourtNames(lines)
+        val courtNames = if (courts.isNotEmpty()) courts else listOf("Court 1")
+        val parsedMatches = extractMatchPairs(lines)
+        if (parsedMatches.isEmpty()) return null
+
+        val indexedMatches = parsedMatches.mapIndexed { index, pair ->
+            val courtName = courtNames[index % courtNames.size]
+            val order = index / courtNames.size + 1
+            ImportedOrderMatch(
+                courtName = courtName,
+                order = order,
+                left = pair.left,
+                right = pair.right,
+                scheduleLabel = pair.scheduleLabel,
+                manualNotBefore = pair.manualNotBefore,
+            )
+        }
+        return ImportedOrderDocument(
+            tournamentName = extractTournamentName(lines) ?: "Imported Order Of Play",
+            courts = courtNames,
+            matches = indexedMatches,
+        )
+    }
+
+    private suspend fun readOrderOfPlayText(uri: Uri): String? = withContext(Dispatchers.IO) {
+        val resolver = appContext.contentResolver
+        val mimeType = resolver.getType(uri)?.lowercase().orEmpty()
+        val isPdf = mimeType.contains("pdf") || uri.toString().lowercase().endsWith(".pdf")
+        val input = resolver.openInputStream(uri) ?: return@withContext null
+        input.use { stream ->
+            if (isPdf) {
+                PDFBoxResourceLoader.init(appContext)
+                PDDocument.load(stream).use { document ->
+                    PDFTextStripper().getText(document)
+                }
+            } else {
+                stream.bufferedReader().readText()
+            }
+        }
+    }
+
+    private fun extractTournamentName(lines: List<String>): String? {
+        val markerIndex = lines.indexOfFirst { it.equals("Order of Play", ignoreCase = true) }
+        if (markerIndex > 0) {
+            val candidate = lines[markerIndex - 1]
+            if (!isNoiseLine(candidate)) return candidate
+        }
+        return lines.firstOrNull { line ->
+            !isNoiseLine(line) &&
+                !line.contains("Court", ignoreCase = true) &&
+                !line.contains("Week Of", ignoreCase = true) &&
+                !line.contains("City", ignoreCase = true)
+        }
+    }
+
+    private fun extractCourtNames(lines: List<String>): List<String> {
+        val courts = mutableListOf<String>()
+        val regex = Regex("(?i)Court\\s+([A-Za-z0-9]+)")
+        lines.forEach { line ->
+            regex.findAll(line).forEach { match ->
+                val name = "Court ${match.groupValues[1]}"
+                if (name !in courts) courts += name
+            }
+        }
+        return courts
+    }
+
+    private fun extractMatchPairs(lines: List<String>): List<ParsedPair> {
+        val pairs = mutableListOf<ParsedPair>()
+        val seen = mutableSetOf<String>()
+        for (index in lines.indices) {
+            if (!isVsToken(lines[index])) continue
+            val leftRaw = collectNameBackward(lines, index - 1)
+            val rightCollection = collectNameForward(lines, index + 1)
+            if (leftRaw.isBlank() || rightCollection.name.isBlank()) continue
+            val left = parseEntrant(leftRaw) ?: continue
+            val right = parseEntrant(rightCollection.name) ?: continue
+            val key = "${left.name.lowercase()}|${right.name.lowercase()}|$index"
+            if (!seen.add(key)) continue
+
+            val schedule = findScheduleContext(lines, index)
+            pairs += ParsedPair(
+                left = left,
+                right = right,
+                scheduleLabel = schedule.label,
+                manualNotBefore = schedule.manualNotBefore,
+            )
+        }
+        return pairs
+    }
+
+    private fun collectNameBackward(lines: List<String>, start: Int): String {
+        val chunks = mutableListOf<String>()
+        var index = start
+        while (index >= 0) {
+            val line = lines[index]
+            if (isNameBoundary(line)) break
+            if (!isSeedToken(line)) chunks += line
+            if (chunks.size >= 6) break
+            index--
+        }
+        return chunks.asReversed().joinToString(" ").normalizeSpaces()
+    }
+
+    private fun collectNameForward(lines: List<String>, start: Int): CollectedName {
+        val chunks = mutableListOf<String>()
+        var index = start
+        while (index < lines.size) {
+            val line = lines[index]
+            if (isNameBoundary(line)) break
+            if (!isSeedToken(line)) chunks += line
+            if (chunks.size >= 6) break
+            index++
+        }
+        return CollectedName(
+            name = chunks.joinToString(" ").normalizeSpaces(),
+            endIndex = index,
+        )
+    }
+
+    private fun parseEntrant(raw: String): ParsedEntrant? {
+        val cleaned = raw
+            .replace(Regex("\\[[^\\]]*]"), "")
+            .replace(".", " ")
+            .normalizeSpaces()
+            .trim()
+        if (cleaned.isBlank()) return null
+        val match = Regex("^(.*?)(?:\\(([A-Za-z]{3})\\))?$").matchEntire(cleaned)
+        val name = (match?.groupValues?.getOrNull(1) ?: cleaned).normalizeSpaces().trim()
+        if (name.isBlank()) return null
+        val countryCode = match?.groupValues?.getOrNull(2)?.uppercase()?.ifBlank { null }
+        return ParsedEntrant(name = name, countryCode = countryCode)
+    }
+
+    private fun findScheduleContext(lines: List<String>, aroundIndex: Int): ScheduleContext {
+        val lowerBound = (aroundIndex - 20).coerceAtLeast(0)
+        var candidateLabel = "Followed By"
+        var candidateTime: String? = null
+        for (index in aroundIndex downTo lowerBound) {
+            val line = lines[index]
+            when {
+                line.contains("Not Before", ignoreCase = true) -> {
+                    candidateLabel = "Not Before"
+                    candidateTime = extractTime(line) ?: findNeighbourTime(lines, index)
+                    break
+                }
+
+                line.contains("Starting at", ignoreCase = true) -> {
+                    candidateLabel = "Starting at"
+                    candidateTime = extractTime(line) ?: findNeighbourTime(lines, index)
+                    break
+                }
+
+                line.contains("Followed By", ignoreCase = true) -> {
+                    candidateLabel = "Followed By"
+                    break
+                }
+            }
+        }
+        val manual = if (candidateLabel == "Not Before" || candidateLabel == "Starting at") {
+            candidateTime?.let { toTodayMillis(it) }
+        } else {
+            null
+        }
+        val label = if (candidateTime != null) "$candidateLabel $candidateTime" else candidateLabel
+        return ScheduleContext(label = label, manualNotBefore = manual)
+    }
+
+    private fun findNeighbourTime(lines: List<String>, index: Int): String? {
+        val window = (index - 2).coerceAtLeast(0)..(index + 2).coerceAtMost(lines.lastIndex)
+        return window.firstNotNullOfOrNull { candidate ->
+            extractTime(lines[candidate])
+        }
+    }
+
+    private fun extractTime(value: String): String? {
+        return Regex("(\\d{1,2}:\\d{2})").find(value)?.groupValues?.getOrNull(1)
+    }
+
+    private fun toTodayMillis(timeLabel: String): Long? {
+        val parts = timeLabel.split(":")
+        if (parts.size != 2) return null
+        val hour = parts[0].toIntOrNull() ?: return null
+        val minute = parts[1].toIntOrNull() ?: return null
+        val now = java.util.Calendar.getInstance()
+        now.set(java.util.Calendar.HOUR_OF_DAY, hour)
+        now.set(java.util.Calendar.MINUTE, minute)
+        now.set(java.util.Calendar.SECOND, 0)
+        now.set(java.util.Calendar.MILLISECOND, 0)
+        return now.timeInMillis
+    }
+
+    private fun isVsToken(line: String): Boolean {
+        val normalized = line.trim().lowercase()
+        return normalized == "vs" || normalized == "vs."
+    }
+
+    private fun isSeedToken(line: String): Boolean {
+        return line.trim().matches(Regex("\\[[^\\]]+]"))
+    }
+
+    private fun isNameBoundary(line: String): Boolean {
+        val value = line.trim()
+        if (value.isBlank()) return true
+        if (isVsToken(value)) return true
+        if (value.equals("GS", ignoreCase = true) || value.equals("BS", ignoreCase = true)) return true
+        if (value.matches(Regex("\\d+\\.?"))) return true
+        if (value.matches(Regex("\\d{1,2}:\\d{2}"))) return true
+        if (value.contains("Court", ignoreCase = true)) return true
+        if (value.contains("Starting at", ignoreCase = true) ||
+            value.contains("Followed By", ignoreCase = true) ||
+            value.contains("Not Before", ignoreCase = true)
+        ) return true
+        if (isScoreLine(value)) return true
+        return isNoiseLine(value)
+    }
+
+    private fun isScoreLine(line: String): Boolean {
+        val normalized = line.trim()
+        if (!normalized.any { it.isDigit() }) return false
+        if (!normalized.contains('-') && !normalized.contains(':')) return false
+        return normalized.matches(Regex("^[0-9()\\-:\\s]+$"))
+    }
+
+    private fun isNoiseLine(line: String): Boolean {
+        return line.startsWith("http", ignoreCase = true) ||
+            line.contains("sign-in", ignoreCase = true) ||
+            line.contains("Released", ignoreCase = true) ||
+            line.contains("local time", ignoreCase = true) ||
+            line.contains("ORDER OF PLAY", ignoreCase = true) ||
+            line.equals("Order of Play", ignoreCase = true)
+    }
+
     private fun SlotPosition.toSlotPositionRef(): SlotPositionRef {
         return when (this) {
             SlotPosition.LEFT -> SlotPositionRef.LEFT
@@ -1410,6 +1774,43 @@ class AppRepository @Inject constructor(
         val playersById: Map<Long, PlayerEntity>,
         val teamPlayersByTeam: Map<Long, List<PlayerEntity>>,
         val defaultRestMinutes: Int,
+    )
+
+    private data class ParsedEntrant(
+        val name: String,
+        val countryCode: String?,
+    )
+
+    private data class ParsedPair(
+        val left: ParsedEntrant,
+        val right: ParsedEntrant,
+        val scheduleLabel: String,
+        val manualNotBefore: Long?,
+    )
+
+    private data class ScheduleContext(
+        val label: String,
+        val manualNotBefore: Long?,
+    )
+
+    private data class CollectedName(
+        val name: String,
+        val endIndex: Int,
+    )
+
+    private data class ImportedOrderMatch(
+        val courtName: String,
+        val order: Int,
+        val left: ParsedEntrant,
+        val right: ParsedEntrant,
+        val scheduleLabel: String,
+        val manualNotBefore: Long?,
+    )
+
+    private data class ImportedOrderDocument(
+        val tournamentName: String,
+        val courts: List<String>,
+        val matches: List<ImportedOrderMatch>,
     )
 
     private companion object {
@@ -1442,3 +1843,5 @@ class AppRepository @Inject constructor(
 
 private fun <T, R> Flow<List<T>>.mapList(transform: (T) -> R): Flow<List<R>> =
     map { list -> list.map(transform) }
+
+private fun String.normalizeSpaces(): String = trim().replace(Regex("\\s+"), " ")
