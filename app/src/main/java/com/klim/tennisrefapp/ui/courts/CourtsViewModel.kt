@@ -41,12 +41,11 @@ class CourtsViewModel @Inject constructor(
         timerManager.observeAllTimers(),
     ) { courts, timers ->
         val rows = courts.map { court ->
-            val activeTimer = timers[court.courtId]
-                ?.takeIf { it.isRunning }
-            CourtListItemUi(court = court, activeTimerState = activeTimer)
+            val timerState = timers[court.courtId]
+            CourtListItemUi(court = court, activeTimerState = timerState)
         }.sortedWith(
             compareBy<CourtListItemUi>(
-                { timerSortRank(it.activeTimerState?.timerType) },
+                { timerSortRank(it.activeTimerState) },
                 { statusSortRank(it.court.status) },
                 { it.court.computedNotBeforeMillis ?: Long.MAX_VALUE },
                 { it.court.courtName },
@@ -96,7 +95,9 @@ class CourtsViewModel @Inject constructor(
         }
     }
 
-    private fun timerSortRank(timerType: CourtTimerType?): Int {
-        return if (timerType != null) 0 else 1
+    private fun timerSortRank(timerState: CourtTimerState?): Int {
+        if (timerState == null) return 2
+        if (timerState.isRunning) return 0
+        return if (timerState.timerType == CourtTimerType.WARMUP) 1 else 2
     }
 }

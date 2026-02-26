@@ -105,7 +105,11 @@ private fun CourtCardItem(
     val court = row.court
     val timerState = row.activeTimerState
     val timerType = timerState?.timerType
-    val statusTint = statusColor(court.status, timerType)
+    val warmupExpiredPendingStart = timerState?.timerType == CourtTimerType.WARMUP &&
+        timerState.isRunning == false &&
+        court.status == CourtStatus.SCHEDULED
+    val hasAlertHighlight = (timerState?.isRunning == true) || warmupExpiredPendingStart
+    val statusTint = statusColor(court.status, hasAlertHighlight)
 
     Card(
         modifier = Modifier
@@ -129,12 +133,16 @@ private fun CourtCardItem(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = if (timerType != null) timerLabel(timerType) else statusLabel(court.status),
+                    text = when {
+                        timerState?.isRunning == true && timerType != null -> timerLabel(timerType)
+                        warmupExpiredPendingStart -> "Warm-up done"
+                        else -> statusLabel(court.status)
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = statusTint,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (timerState != null) {
+                if (timerState?.isRunning == true) {
                     Text(
                         text = formatRemaining(timerState.remainingMillis),
                         style = MaterialTheme.typography.bodyMedium,
@@ -178,8 +186,8 @@ private fun statusLabel(status: CourtStatus): String {
 }
 
 @Composable
-private fun statusColor(status: CourtStatus, timerType: CourtTimerType? = null): androidx.compose.ui.graphics.Color {
-    if (timerType != null) return Color(0xFFD64444)
+private fun statusColor(status: CourtStatus, hasAlertHighlight: Boolean): androidx.compose.ui.graphics.Color {
+    if (hasAlertHighlight) return Color(0xFFD64444)
     return when (status) {
         CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
         CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.primary
