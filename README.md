@@ -75,8 +75,8 @@ For doubles, both players constrain availability. For unresolved slots, only kno
 - Timer completion can alert by vibration + notification, including when the app is in background.
 
 ## Court Controls
-- `Next` on a court card assigns the next unassigned scheduled match to that court.
 - `Swap` (between left/right player panels) swaps sides before match start.
+- New order-of-play action opens a file picker, then refreshes current loaded schedule.
 
 ## Project Docs
 - Contributor guide: `AGENTS.md`

@@ -4,7 +4,7 @@
 - Entry point of the app.
 - Actions:
   - `Courts`: opens courts.
-  - `New Order Of Play`: reloads seeded schedule from the sample order-of-play set.
+  - `New Order Of Play`: opens file picker, then reloads seeded schedule from the sample order-of-play set.
   - `Players`: opens player list.
   - `History`: opens completed-match history grouped by court.
 
