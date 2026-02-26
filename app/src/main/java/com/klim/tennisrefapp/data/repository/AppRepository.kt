@@ -83,6 +83,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -1536,18 +1537,7 @@ class AppRepository @Inject constructor(
         val parsedMatches = extractMatchPairs(lines)
         if (parsedMatches.isEmpty()) return null
 
-        val indexedMatches = parsedMatches.mapIndexed { index, pair ->
-            val courtName = courtNames[index % courtNames.size]
-            val order = index / courtNames.size + 1
-            ImportedOrderMatch(
-                courtName = courtName,
-                order = order,
-                left = pair.left,
-                right = pair.right,
-                scheduleLabel = pair.scheduleLabel,
-                manualNotBefore = pair.manualNotBefore,
-            )
-        }
+        val indexedMatches = assignParsedMatchesToCourts(parsedMatches, courtNames)
         return ImportedOrderDocument(
             tournamentName = extractTournamentName(lines) ?: "Imported Order Of Play",
             courts = courtNames,
@@ -1621,16 +1611,12 @@ class AppRepository @Inject constructor(
     private fun extractMatchPairs(lines: List<String>): List<ParsedPair> {
         val pairs = mutableListOf<ParsedPair>()
         val seen = mutableSetOf<String>()
-        for (index in lines.indices) {
-            if (!isVsToken(lines[index])) continue
-            val leftRaw = collectNameBackward(lines, index - 1)
-            val rightCollection = collectNameForward(lines, index + 1)
-            if (leftRaw.isBlank() || rightCollection.name.isBlank()) continue
-            val left = parseEntrant(leftRaw) ?: continue
-            val right = parseEntrant(rightCollection.name) ?: continue
+        fun appendPair(index: Int, leftRaw: String, rightRaw: String) {
+            if (leftRaw.isBlank() || rightRaw.isBlank()) return
+            val left = parseEntrant(leftRaw) ?: return
+            val right = parseEntrant(rightRaw) ?: return
             val key = "${left.name.lowercase()}|${right.name.lowercase()}|$index"
-            if (!seen.add(key)) continue
-
+            if (!seen.add(key)) return
             val schedule = findScheduleContext(lines, index)
             pairs += ParsedPair(
                 left = left,
@@ -1639,7 +1625,95 @@ class AppRepository @Inject constructor(
                 manualNotBefore = schedule.manualNotBefore,
             )
         }
+        for (index in lines.indices) {
+            val line = lines[index]
+            if (isVsToken(line)) {
+                val leftRaw = collectNameBackward(lines, index - 1)
+                val rightCollection = collectNameForward(lines, index + 1)
+                appendPair(index, leftRaw, rightCollection.name)
+                continue
+            }
+            val inlinePair = extractInlinePair(line) ?: continue
+            appendPair(index, inlinePair.leftRaw, inlinePair.rightRaw)
+        }
         return pairs
+    }
+
+    private fun assignParsedMatchesToCourts(
+        parsedMatches: List<ParsedPair>,
+        courtNames: List<String>,
+    ): List<ImportedOrderMatch> {
+        if (parsedMatches.isEmpty()) return emptyList()
+        if (courtNames.isEmpty()) return parsedMatches.mapIndexed { index, pair ->
+            ImportedOrderMatch(
+                courtName = "Court 1",
+                order = index + 1,
+                left = pair.left,
+                right = pair.right,
+                scheduleLabel = pair.scheduleLabel,
+                manualNotBefore = pair.manualNotBefore,
+            )
+        }
+        val courtCount = courtNames.size
+        val rounds = ceil(parsedMatches.size.toDouble() / courtCount.toDouble()).toInt().coerceAtLeast(1)
+
+        fun rowMajorPlacement(index: Int): CourtPlacement {
+            return CourtPlacement(
+                courtIndex = index % courtCount,
+                order = index / courtCount + 1,
+            )
+        }
+
+        fun columnMajorPlacement(index: Int): CourtPlacement {
+            return CourtPlacement(
+                courtIndex = (index / rounds).coerceAtMost(courtCount - 1),
+                order = index % rounds + 1,
+            )
+        }
+
+        val rowMajorScore = scheduleCoherenceScore(parsedMatches, ::rowMajorPlacement)
+        val columnMajorScore = scheduleCoherenceScore(parsedMatches, ::columnMajorPlacement)
+        val placement = if (columnMajorScore > rowMajorScore) {
+            ::columnMajorPlacement
+        } else {
+            ::rowMajorPlacement
+        }
+
+        return parsedMatches.mapIndexed { index, pair ->
+            val place = placement(index)
+            ImportedOrderMatch(
+                courtName = courtNames[place.courtIndex],
+                order = place.order,
+                left = pair.left,
+                right = pair.right,
+                scheduleLabel = pair.scheduleLabel,
+                manualNotBefore = pair.manualNotBefore,
+            )
+        }
+    }
+
+    private fun scheduleCoherenceScore(
+        matches: List<ParsedPair>,
+        placement: (Int) -> CourtPlacement,
+    ): Int {
+        if (matches.isEmpty()) return 0
+        val groupedByOrder = mutableMapOf<Int, MutableList<String>>()
+        matches.forEachIndexed { index, pair ->
+            val order = placement(index).order
+            groupedByOrder.getOrPut(order) { mutableListOf() } += scheduleType(pair.scheduleLabel)
+        }
+        return groupedByOrder.values.sumOf { labels ->
+            labels.groupingBy { it }.eachCount().values.maxOrNull() ?: 0
+        }
+    }
+
+    private fun scheduleType(scheduleLabel: String): String {
+        return when {
+            scheduleLabel.contains("Not Before", ignoreCase = true) -> "NOT_BEFORE"
+            scheduleLabel.contains("Starting at", ignoreCase = true) -> "STARTING_AT"
+            scheduleLabel.contains("Followed By", ignoreCase = true) -> "FOLLOWED_BY"
+            else -> "UNKNOWN"
+        }
     }
 
     private fun collectNameBackward(lines: List<String>, start: Int): String {
@@ -1674,6 +1748,10 @@ class AppRepository @Inject constructor(
     private fun parseEntrant(raw: String): ParsedEntrant? {
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
+            .replace(Regex("(?i)^court\\s+[A-Za-z0-9]+\\s*"), "")
+            .replace(Regex("(?i)^(?:starting\\s+at|followed\\s+by|not\\s+before)\\s*\\d{0,2}:?\\d{0,2}\\s*"), "")
+            .replace(Regex("^\\d+\\.?\\s*"), "")
+            .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), "")
             .replace(".", " ")
             .normalizeSpaces()
             .trim()
@@ -1744,8 +1822,35 @@ class AppRepository @Inject constructor(
     }
 
     private fun isVsToken(line: String): Boolean {
-        val normalized = line.trim().lowercase()
-        return normalized == "vs" || normalized == "vs."
+        return line.trim().matches(Regex("(?i)^(?:v\\.?s\\.?|vs\\.?|v\\.)$"))
+    }
+
+    private fun extractInlinePair(line: String): InlinePair? {
+        val normalized = line.normalizeSpaces().trim()
+        if (normalized.isBlank()) return null
+        val tokenMatch = INLINE_VS_REGEX.find(normalized) ?: return null
+        val leftRaw = normalized
+            .substring(0, tokenMatch.range.first)
+            .trim()
+        var rightRaw = normalized
+            .substring(tokenMatch.range.last + 1)
+            .trim()
+        if (leftRaw.isBlank() || rightRaw.isBlank()) return null
+
+        val scheduleStart = Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before|court\\s+[A-Za-z0-9]+)\\b")
+            .find(rightRaw)
+            ?.range
+            ?.first
+        if (scheduleStart != null && scheduleStart > 0) {
+            rightRaw = rightRaw.substring(0, scheduleStart).trim()
+        }
+        rightRaw = rightRaw
+            .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), "")
+            .normalizeSpaces()
+            .trim()
+        if (rightRaw.isBlank()) return null
+
+        return InlinePair(leftRaw = leftRaw, rightRaw = rightRaw)
     }
 
     private fun isSeedToken(line: String): Boolean {
@@ -1829,6 +1934,16 @@ class AppRepository @Inject constructor(
         val endIndex: Int,
     )
 
+    private data class InlinePair(
+        val leftRaw: String,
+        val rightRaw: String,
+    )
+
+    private data class CourtPlacement(
+        val courtIndex: Int,
+        val order: Int,
+    )
+
     private data class ImportedOrderMatch(
         val courtName: String,
         val order: Int,
@@ -1847,6 +1962,7 @@ class AppRepository @Inject constructor(
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
+        val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?s\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
             "CHN" to "CN",
