@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,6 +38,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
+import kotlinx.coroutines.delay
 
 @Composable
 fun CourtsRoute(
@@ -99,6 +101,7 @@ private fun CourtCardItem(
     row: CourtListItemUi,
     onTap: () -> Unit,
 ) {
+    val nowMillis = rememberTickerNowMillis()
     val court = row.court
     val timerState = row.activeTimerState
     val timerType = timerState?.timerType
@@ -136,6 +139,14 @@ private fun CourtCardItem(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
+                } else if (court.status == CourtStatus.IN_PROGRESS) {
+                    court.startedAtMillis?.let { startedAt ->
+                        Text(
+                            text = "Elapsed ${formatDuration((nowMillis - startedAt).coerceAtLeast(0L))}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 } else if (court.status == CourtStatus.SCHEDULED) {
                     court.computedNotBeforeMillis?.let { notBefore ->
                         Text(
@@ -188,6 +199,23 @@ private fun formatRemaining(remainingMillis: Long): String {
     return "%d:%02d".format(minutes, seconds)
 }
 
+private fun formatDuration(durationMillis: Long): String {
+    val totalMinutes = durationMillis / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
+}
+
+@Composable
+private fun rememberTickerNowMillis(intervalMillis: Long = 1_000L): Long {
+    return produceState(initialValue = System.currentTimeMillis(), intervalMillis) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(intervalMillis)
+        }
+    }.value
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun CourtCardItemPreview() {
@@ -201,6 +229,7 @@ private fun CourtCardItemPreview() {
                     currentMatchLabel = "🇨🇳 Yiyuan Su vs 🇬🇧 Vincent Fletcher",
                     computedNotBeforeMillis = 1_700_000_000_000,
                     matchId = 42,
+                    startedAtMillis = null,
                 ),
             ),
             onTap = {},

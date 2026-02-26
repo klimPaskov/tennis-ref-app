@@ -68,6 +68,10 @@ import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.usecase.ApplyViolationUseCase
 import com.klim.tennisrefapp.domain.usecase.ComputeNotBeforeUseCase
 import com.klim.tennisrefapp.domain.usecase.ResolveSlotUseCase
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
@@ -218,19 +222,10 @@ class AppRepository @Inject constructor(
                 val courtEntityId = courtIdByName.getValue(seed.courtName)
                 val leftTeamId = playerIdByName.getValue(seed.left.name)
                 val rightTeamId = playerIdByName.getValue(seed.right.name)
-                val isCompleted = seed.order == 1
-                val completedCourtOffset = courtEntityId - 1L
-                val startedAt = if (isCompleted) {
-                    now - (240L - completedCourtOffset * 6L) * 60_000L
-                } else {
-                    null
-                }
-                val endedAt = if (isCompleted) startedAt?.plus(35L * 60_000L) else null
-                val winnerTeamId = when (seed.winnerSide) {
-                    MatchWinnerSide.LEFT -> leftTeamId
-                    MatchWinnerSide.RIGHT -> rightTeamId
-                    null -> null
-                }
+                val isCompleted = false
+                val startedAt: Long? = null
+                val endedAt: Long? = null
+                val winnerTeamId: Long? = null
                 val manualNotBefore = when (seed.order) {
                     2 -> now + 15L * 60_000L
                     3 -> now + 90L * 60_000L
@@ -254,11 +249,11 @@ class AppRepository @Inject constructor(
                     startedAt = startedAt,
                     endedAt = endedAt,
                     winnerTeamId = winnerTeamId,
-                    initialLeftTeamId = if (isCompleted) leftTeamId else null,
-                    initialRightTeamId = if (isCompleted) rightTeamId else null,
-                    initialServerPlayerId = if (isCompleted) leftTeamId else null,
-                    resultType = if (isCompleted) MatchResultTypeEntity.NORMAL else null,
-                    scoreText = seed.score,
+                    initialLeftTeamId = null,
+                    initialRightTeamId = null,
+                    initialServerPlayerId = null,
+                    resultType = null,
+                    scoreText = null,
                 )
 
                 slotEntities += SlotEntity(
@@ -585,6 +580,7 @@ class AppRepository @Inject constructor(
                 currentRestMinutes = player.restMinutes ?: context.defaultRestMinutes,
                 completedMatches = completed,
                 nextMatch = next,
+                canRequestRest = canPlayerRequestRest(completed, next != null),
             )
         }
     }
@@ -772,6 +768,7 @@ class AppRepository @Inject constructor(
                         currentMatchLabel = "No match",
                         computedNotBeforeMillis = null,
                         matchId = null,
+                        startedAtMillis = null,
                     )
                 } else {
                     CourtCard(
@@ -781,6 +778,7 @@ class AppRepository @Inject constructor(
                         currentMatchLabel = formatMatchLabel(currentMatch, context),
                         computedNotBeforeMillis = computeNotBefore(currentMatch, context),
                         matchId = currentMatch.id,
+                        startedAtMillis = currentMatch.startedAt,
                     )
                 }
             }
@@ -1452,6 +1450,16 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private fun canPlayerRequestRest(completed: List<PlayerMatchSnapshot>, hasUpcomingMatch: Boolean): Boolean {
+        if (!hasUpcomingMatch) return false
+        return completed.any { snapshot ->
+            val started = snapshot.startedAtMillis ?: return@any false
+            val ended = snapshot.endedAtMillis ?: return@any false
+            val durationMinutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
+            durationMinutes >= REST_PROMPT_MIN_MATCH_MINUTES
+        }
+    }
+
     private fun formatSideShortLabel(side: SideParticipant?): String {
         val players = side?.players.orEmpty()
         if (players.isNotEmpty()) {
@@ -1551,6 +1559,14 @@ class AppRepository @Inject constructor(
         val resolver = appContext.contentResolver
         val mimeType = resolver.getType(uri)?.lowercase().orEmpty()
         val isPdf = mimeType.contains("pdf") || uri.toString().lowercase().endsWith(".pdf")
+        val isImage = mimeType.startsWith("image/") ||
+            uri.toString().lowercase().endsWith(".png") ||
+            uri.toString().lowercase().endsWith(".jpg") ||
+            uri.toString().lowercase().endsWith(".jpeg") ||
+            uri.toString().lowercase().endsWith(".webp")
+        if (isImage) {
+            return@withContext readOrderOfPlayTextFromImage(uri)
+        }
         val input = resolver.openInputStream(uri) ?: return@withContext null
         input.use { stream ->
             if (isPdf) {
@@ -1562,6 +1578,18 @@ class AppRepository @Inject constructor(
                 stream.bufferedReader().readText()
             }
         }
+    }
+
+    private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val image = InputImage.fromFilePath(appContext, uri)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            try {
+                Tasks.await(recognizer.process(image)).text
+            } finally {
+                recognizer.close()
+            }
+        }.getOrNull()
     }
 
     private fun extractTournamentName(lines: List<String>): String? {
