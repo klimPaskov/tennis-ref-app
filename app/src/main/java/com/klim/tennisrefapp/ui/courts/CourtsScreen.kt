@@ -5,14 +5,18 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.background
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -113,11 +117,20 @@ private fun CourtCardItem(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
-                    Text(
-                        text = statusLabel(court.status),
+                    Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(statusColor(court.status), CircleShape),
+                        )
+                        Text(
+                            text = statusLabel(court.status),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
                 }
                 court.computedNotBeforeMillis?.let { notBefore ->
                     Text(
@@ -149,6 +162,14 @@ private fun statusLabel(status: CourtStatus): String {
         CourtStatus.IN_PROGRESS -> "In Progress"
         CourtStatus.COMPLETED -> "Completed"
     }
+}
+
+@Composable
+private fun statusColor(status: CourtStatus) = when (status) {
+    CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
+    CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.secondary
+    CourtStatus.IN_PROGRESS -> MaterialTheme.colorScheme.tertiary
+    CourtStatus.COMPLETED -> MaterialTheme.colorScheme.primary
 }
 
 private fun formatTime(timestamp: Long): String {
