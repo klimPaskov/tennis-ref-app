@@ -117,26 +117,28 @@ private fun PlayerDetailScreen(
                 )
             }
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text("Rest Minutes", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                        Text("Current: ${detail.currentRestMinutes} min", style = MaterialTheme.typography.bodySmall)
-                        TextField(
-                            value = restInput,
-                            onValueChange = { value -> restInput = value.filter { it.isDigit() }.take(3) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        )
-                        TextButton(
-                            onClick = {
-                                val minutes = restInput.toIntOrNull() ?: detail.currentRestMinutes
-                                onUpdateRestMinutes(minutes)
-                            },
+                if (detail.nextMatch != null) {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("Save Rest")
+                            Text("Rest Minutes", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text("Current: ${detail.currentRestMinutes} min", style = MaterialTheme.typography.bodySmall)
+                            TextField(
+                                value = restInput,
+                                onValueChange = { value -> restInput = value.filter { it.isDigit() }.take(3) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            )
+                            TextButton(
+                                onClick = {
+                                    val minutes = restInput.toIntOrNull() ?: detail.currentRestMinutes
+                                    onUpdateRestMinutes(minutes)
+                                },
+                            ) {
+                                Text("Save Rest")
+                            }
                         }
                     }
                 }

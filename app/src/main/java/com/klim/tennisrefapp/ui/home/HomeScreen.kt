@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -90,18 +91,18 @@ private fun HomeScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("Courts")
             }
-            Button(onClick = onPlayers, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onPlayers, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("Players")
             }
-            Button(onClick = onHistory, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onHistory, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("History")
             }
             Button(
                 onClick = onReload,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
                 enabled = !uiState.isReloading,
             ) {
                 Text(if (uiState.isReloading) "Loading..." else "New Order Of Play")
