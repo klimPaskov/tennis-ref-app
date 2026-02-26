@@ -22,11 +22,18 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    fun onReloadOrderOfPlay() {
+    fun onOrderOfPlaySelected(uriString: String?) {
+        if (uriString.isNullOrBlank()) {
+            _uiState.value = _uiState.value.copy(message = "No file selected.")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
             tournamentRepository.reloadOrderOfPlay()
-            _uiState.value = HomeUiState(isReloading = false, message = "New order of play loaded.")
+            _uiState.value = HomeUiState(
+                isReloading = false,
+                message = "New order of play loaded from selected file.",
+            )
         }
     }
 

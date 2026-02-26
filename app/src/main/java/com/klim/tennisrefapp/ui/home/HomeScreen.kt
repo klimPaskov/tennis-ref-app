@@ -1,5 +1,8 @@
 package com.klim.tennisrefapp.ui.home
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -30,6 +34,20 @@ fun HomeRoute(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val pickOrderOfPlayLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+        }
+        viewModel.onOrderOfPlaySelected(uri?.toString())
+    }
 
     LaunchedEffect(uiState.message) {
         val message = uiState.message ?: return@LaunchedEffect
@@ -40,7 +58,9 @@ fun HomeRoute(
     HomeScreen(
         uiState = uiState,
         onContinue = onContinue,
-        onReload = viewModel::onReloadOrderOfPlay,
+        onReload = {
+            pickOrderOfPlayLauncher.launch(arrayOf("application/pdf", "application/octet-stream"))
+        },
         onPlayers = onPlayers,
         onHistory = onHistory,
         snackbarHostState = snackbarHostState,
