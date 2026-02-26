@@ -60,7 +60,7 @@ fun HomeRoute(
         uiState = uiState,
         onContinue = onContinue,
         onReload = {
-            pickOrderOfPlayLauncher.launch(arrayOf("application/pdf", "text/plain", "*/*"))
+            pickOrderOfPlayLauncher.launch(arrayOf("image/png", "image/jpeg", "application/pdf", "text/plain", "*/*"))
         },
         onPlayers = onPlayers,
         onHistory = onHistory,
