@@ -1,29 +1,24 @@
 # Timer, Violations, Score, and Court Actions
 
-## Timer (5:00)
-- Court detail now has a live timer button.
-- Milestones trigger at 3:00, 4:00, and 5:00 with:
-  - vibration (1x, 1x, 2x)
-  - local notification naming the court
-  - `EventLog` entries with `TIMER` type
+## Timer
+- In-progress view keeps a compact timer control.
+- The UI no longer defaults to showing a `5:00` warm-up label in match-progress context.
 
 ## Violations
-- In-progress matches can open a violation dialog.
-- Referee selects offender and violation type, then applies.
-- Ladder guidance is computed and shown in snackbar text.
+- Violations open from a small icon button.
+- Violation counts are shown only inside the violation dialog.
+- Counts are displayed only for players that already have at least one recorded violation.
 - Undo removes the latest violation event.
-- Per-player counts are shown on court detail.
+- If there is nothing to undo, feedback is shown as a short snackbar (no persistent undo action).
 
 ## Final score / match end
-- In-progress matches can submit final score with:
-  - winner side (left/right)
-  - result type (`NORMAL`, `RETIREMENT`, `WALKOVER`, `DEFAULT`)
-  - score text
+- Winner is selected by participant name (not left/right labels).
+- Result type is automatic:
+  - empty score -> `WALKOVER`
+  - incomplete score (for example `4:3`) -> `RETIREMENT`
+  - complete score -> `NORMAL`
 - Submitting score records `endedAt`, sets winner, marks match completed, and logs `MATCH_ENDED`.
 
 ## Court assignment actions
-- Courts list now exposes quick actions:
-  - assign first unassigned scheduled match
-  - swap with next court
-  - clear current court assignment
 - Court detail supports moving match to another court or unassigned.
+- Court detail supports swapping matches between courts.

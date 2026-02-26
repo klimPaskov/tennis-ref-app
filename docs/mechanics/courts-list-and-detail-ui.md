@@ -10,10 +10,11 @@
 - Tapping a card opens the court detail screen.
 
 ## Court detail behavior
-- Renders left and right sides separately.
-- Supports a one-tap `Swap sides` action for scheduled matches.
-- Lets referee tap a player name to select initial server.
-- Shows disabled placeholders for in-progress actions (`Timer`, `Violations`, `Score`) once the match is started.
+- Renders two equal side panels with a compact swap icon between them.
+- Uses larger participant rows for readability.
+- Lets referee tap an existing participant row to select initial server (row highlight indicates selected server).
+- Removes duplicate left/right labels in participant content.
+- In-progress layout uses compact icon controls for violations/undo and a full-width score action.
 
 ## Main files
 - `app/src/main/java/com/klim/tennisrefapp/ui/courts/CourtsScreen.kt`
