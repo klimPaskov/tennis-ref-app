@@ -660,7 +660,7 @@ private fun ParticipantSideCard(
                     ) {
                         Text(
                             text = player.name,
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
                         )
