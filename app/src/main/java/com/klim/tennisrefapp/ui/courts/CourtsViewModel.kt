@@ -97,10 +97,6 @@ class CourtsViewModel @Inject constructor(
     }
 
     private fun timerSortRank(timerType: CourtTimerType?): Int {
-        return when (timerType) {
-            CourtTimerType.WARMUP -> 0
-            null -> 2
-            else -> 1
-        }
+        return if (timerType != null) 0 else 1
     }
 }

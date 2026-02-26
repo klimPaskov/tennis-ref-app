@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -178,12 +179,11 @@ private fun statusLabel(status: CourtStatus): String {
 
 @Composable
 private fun statusColor(status: CourtStatus, timerType: CourtTimerType? = null): androidx.compose.ui.graphics.Color {
-    if (timerType == CourtTimerType.WARMUP) return MaterialTheme.colorScheme.primary
-    if (timerType != null) return MaterialTheme.colorScheme.error
+    if (timerType != null) return Color(0xFFD64444)
     return when (status) {
         CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
         CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.primary
-        CourtStatus.IN_PROGRESS -> MaterialTheme.colorScheme.tertiary
+        CourtStatus.IN_PROGRESS -> Color(0xFFE0B422)
         CourtStatus.COMPLETED -> MaterialTheme.colorScheme.secondary
     }
 }

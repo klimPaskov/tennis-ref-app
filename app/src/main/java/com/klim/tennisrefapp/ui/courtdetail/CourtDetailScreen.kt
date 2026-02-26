@@ -1392,9 +1392,9 @@ private fun statusLabel(status: CourtStatus): String {
 @Composable
 private fun statusColor(status: CourtStatus) = when (status) {
     CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
-    CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.secondary
-    CourtStatus.IN_PROGRESS -> MaterialTheme.colorScheme.tertiary
-    CourtStatus.COMPLETED -> MaterialTheme.colorScheme.primary
+    CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.primary
+    CourtStatus.IN_PROGRESS -> androidx.compose.ui.graphics.Color(0xFFE0B422)
+    CourtStatus.COMPLETED -> MaterialTheme.colorScheme.secondary
 }
 
 private fun formatTime(timestamp: Long): String {
