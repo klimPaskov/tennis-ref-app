@@ -17,6 +17,7 @@ data class PlayerDetailInsight(
     val currentRestMinutes: Int,
     val completedMatches: List<PlayerMatchSnapshot>,
     val nextMatch: PlayerMatchSnapshot?,
+    val canRequestRest: Boolean,
 )
 
 data class PlayerMatchSnapshot(

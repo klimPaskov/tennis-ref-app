@@ -117,7 +117,7 @@ private fun PlayerDetailScreen(
                 )
             }
             item {
-                if (detail.nextMatch != null) {
+                if (detail.canRequestRest) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
