@@ -102,7 +102,7 @@ private fun CourtCardItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onTap),
-        border = BorderStroke(1.dp, statusColor(court.status)),
+        border = BorderStroke(2.dp, statusColor(court.status)),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),

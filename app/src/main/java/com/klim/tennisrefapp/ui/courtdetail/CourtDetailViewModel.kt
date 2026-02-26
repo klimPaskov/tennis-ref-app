@@ -29,7 +29,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -40,7 +39,6 @@ data class CourtDetailUiState(
     val timerState: CourtTimerState? = null,
     val matchEvents: List<MatchEvent> = emptyList(),
     val violationCountsByPlayer: Map<Long, ViolationCounts> = emptyMap(),
-    val availableCourts: List<Pair<Long, String>> = emptyList(),
 )
 
 data class UiFeedback(
@@ -76,16 +74,12 @@ class CourtDetailViewModel @Inject constructor(
         timerManager.observeTimer(detail.courtId)
     }
 
-    private val courtsFlow = courtRepository.observeCourtCards()
-        .map { cards -> cards.map { it.courtId to it.courtName } }
-
     val uiState: StateFlow<CourtDetailUiState> = combine(
         detailFlow,
         selectedServerPlayerId,
         feedbackMessage,
         timerFlow,
         eventsFlow,
-        courtsFlow,
     ) { values ->
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
@@ -93,8 +87,6 @@ class CourtDetailViewModel @Inject constructor(
         val timer = values[3] as CourtTimerState?
         @Suppress("UNCHECKED_CAST")
         val events = values[4] as List<MatchEvent>
-        @Suppress("UNCHECKED_CAST")
-        val courts = values[5] as List<Pair<Long, String>>
         val allowedServerIds = buildList {
             addAll(detail?.leftSide?.players?.map { it.playerId }.orEmpty())
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
@@ -112,7 +104,6 @@ class CourtDetailViewModel @Inject constructor(
             timerState = timer,
             matchEvents = events,
             violationCountsByPlayer = countViolations(events),
-            availableCourts = courts,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -205,7 +196,7 @@ class CourtDetailViewModel @Inject constructor(
                 violationName = violationName,
             )
             feedbackMessage.value = UiFeedback(
-                message = "${result.summary}. This offence #${result.guidance.offenceNumber} -> ${result.guidance.appliedPenalty}. Next -> ${result.guidance.nextPenalty}",
+                message = "${result.summary}. Offence ${result.guidance.offenceNumber}: ${result.guidance.appliedPenalty}. Next: ${result.guidance.nextPenalty}",
                 actionLabel = "Undo",
             )
         }

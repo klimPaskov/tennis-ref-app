@@ -5,6 +5,7 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,12 +52,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.klim.tennisrefapp.data.timer.CourtTimerState
@@ -108,6 +115,7 @@ fun CourtDetailRoute(
 
     LaunchedEffect(uiState.feedbackMessage) {
         val feedback = uiState.feedbackMessage ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
         val result = snackbarHostState.showSnackbar(
             message = feedback.message,
             actionLabel = feedback.actionLabel,
@@ -130,8 +138,6 @@ fun CourtDetailRoute(
         onStopTimer = viewModel::onStopTimer,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
-        onMoveMatchToCourt = viewModel::onMoveMatchToCourt,
-        onSwapWithCourt = viewModel::onSwapWithCourt,
         onUndoViolation = viewModel::onUndoLastViolation,
         snackbarHostState = snackbarHostState,
     )
@@ -149,16 +155,12 @@ private fun CourtDetailScreen(
     onStopTimer: () -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
-    onMoveMatchToCourt: (Long?) -> Unit,
-    onSwapWithCourt: (Long) -> Unit,
     onUndoViolation: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
     var showViolationDialog by remember { mutableStateOf(false) }
     var showScoreDialog by remember { mutableStateOf(false) }
-    var showMoveDialog by remember { mutableStateOf(false) }
-    var showSwapDialog by remember { mutableStateOf(false) }
     var showTimerDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -217,8 +219,6 @@ private fun CourtDetailScreen(
                         onOpenViolations = { showViolationDialog = true },
                         onOpenFinalScore = { showScoreDialog = true },
                         onUndoViolation = onUndoViolation,
-                        onOpenMove = { showMoveDialog = true },
-                        onOpenSwapCourt = { showSwapDialog = true },
                     )
                 }
 
@@ -261,30 +261,6 @@ private fun CourtDetailScreen(
             onSubmit = { winnerSide, score ->
                 onSubmitFinalScore(winnerSide, score)
                 showScoreDialog = false
-            },
-        )
-    }
-
-    if (showMoveDialog && detail != null) {
-        MoveDialog(
-            availableCourts = uiState.availableCourts,
-            currentCourtId = detail.courtId,
-            onDismiss = { showMoveDialog = false },
-            onMove = { newCourtId ->
-                onMoveMatchToCourt(newCourtId)
-                showMoveDialog = false
-            },
-        )
-    }
-
-    if (showSwapDialog && detail != null) {
-        SwapDialog(
-            availableCourts = uiState.availableCourts,
-            currentCourtId = detail.courtId,
-            onDismiss = { showSwapDialog = false },
-            onSwap = { otherCourtId ->
-                onSwapWithCourt(otherCourtId)
-                showSwapDialog = false
             },
         )
     }
@@ -395,8 +371,6 @@ private fun InProgressActions(
     onOpenViolations: () -> Unit,
     onOpenFinalScore: () -> Unit,
     onUndoViolation: () -> Unit,
-    onOpenMove: () -> Unit,
-    onOpenSwapCourt: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -427,16 +401,7 @@ private fun InProgressActions(
     }
 
     Button(onClick = onOpenFinalScore, modifier = Modifier.fillMaxWidth()) {
-        Text("Set Winner and Score")
-    }
-
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onOpenMove, modifier = Modifier.weight(1f)) {
-            Text("Move")
-        }
-        OutlinedButton(onClick = onOpenSwapCourt, modifier = Modifier.weight(1f)) {
-            Text("Swap Court")
-        }
+        Text("Finalize Match")
     }
 }
 
@@ -527,6 +492,10 @@ private fun ViolationDialog(
                             text = "${displayPlayerLabel(player)}: Code ${counts.codeViolationCount}, Server TV ${counts.timeViolationCountServer}, Receiver TV ${counts.timeViolationCountReceiver}",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        val guidance = buildViolationGuidanceSummary(counts)
+                        if (guidance.isNotBlank()) {
+                            Text(guidance, style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
 
@@ -679,61 +648,6 @@ private fun FinalScoreDialog(
 }
 
 @Composable
-private fun MoveDialog(
-    availableCourts: List<Pair<Long, String>>,
-    currentCourtId: Long,
-    onDismiss: () -> Unit,
-    onMove: (Long?) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Move Match") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { onMove(null) }) {
-                    Text("Move to unassigned")
-                }
-                availableCourts.forEach { (courtId, name) ->
-                    if (courtId == currentCourtId) return@forEach
-                    TextButton(onClick = { onMove(courtId) }) {
-                        Text("Move to $name")
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        },
-    )
-}
-
-@Composable
-private fun SwapDialog(
-    availableCourts: List<Pair<Long, String>>,
-    currentCourtId: Long,
-    onDismiss: () -> Unit,
-    onSwap: (Long) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Swap With Court") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                availableCourts.forEach { (courtId, name) ->
-                    if (courtId == currentCourtId) return@forEach
-                    TextButton(onClick = { onSwap(courtId) }) {
-                        Text("Swap with $name")
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        },
-    )
-}
-
-@Composable
 private fun ParticipantSideCard(
     modifier: Modifier,
     side: SideParticipant?,
@@ -772,30 +686,13 @@ private fun ParticipantSideCard(
                     ) {
                         val flag = countryCodeToFlagEmoji(player.countryCode)
                         val (firstLine, secondLine) = splitNameIntoTwoLines(player.name)
-                        val maxLineLength = maxOf(firstLine.length, secondLine?.length ?: 0)
-                        val style = when {
-                            maxLineLength >= 30 -> MaterialTheme.typography.bodySmall
-                            maxLineLength >= 20 -> MaterialTheme.typography.labelLarge
-                            maxLineLength >= 14 -> MaterialTheme.typography.titleMedium
-                            else -> MaterialTheme.typography.titleLarge
-                        }
                         Column(
                             modifier = Modifier.weight(1f),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Text(
-                                text = firstLine,
-                                style = style,
-                                fontWeight = FontWeight.SemiBold,
-                                textAlign = TextAlign.Center,
-                            )
+                            AutoSizingNameLine(firstLine)
                             if (!secondLine.isNullOrBlank()) {
-                                Text(
-                                    text = secondLine,
-                                    style = style,
-                                    fontWeight = FontWeight.SemiBold,
-                                    textAlign = TextAlign.Center,
-                                )
+                                AutoSizingNameLine(secondLine)
                             }
                             if (flag != null) {
                                 Text(
@@ -852,6 +749,66 @@ private fun ScoreSetRow(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         )
     }
+}
+
+@Composable
+private fun AutoSizingNameLine(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    val baseStyle = MaterialTheme.typography.titleLarge
+    val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val availableWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val fontSize = remember(text, availableWidthPx) {
+            chooseFontSizeToFitLine(
+                text = text,
+                maxWidthPx = availableWidthPx,
+                textMeasurer = textMeasurer,
+                baseStyle = baseStyle,
+                max = 28.sp,
+                min = 11.sp,
+            )
+        }
+        Text(
+            text = text,
+            style = baseStyle.copy(
+                fontSize = fontSize,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = (fontSize.value + 2f).sp,
+            ),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+private fun chooseFontSizeToFitLine(
+    text: String,
+    maxWidthPx: Float,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    baseStyle: TextStyle,
+    max: TextUnit,
+    min: TextUnit,
+): TextUnit {
+    var size = max.value
+    while (size >= min.value) {
+        val measured = textMeasurer.measure(
+            text = text,
+            style = baseStyle.copy(fontSize = size.sp, fontWeight = FontWeight.SemiBold),
+            maxLines = 1,
+            softWrap = false,
+        )
+        if (measured.size.width <= maxWidthPx) {
+            return size.sp
+        }
+        size -= 1f
+    }
+    return min
 }
 
 private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
@@ -942,6 +899,20 @@ private fun penaltyForOffence(offenceNumber: Int): String {
         offenceNumber == 3 -> "Game Penalty"
         else -> "Default"
     }
+}
+
+private fun buildViolationGuidanceSummary(counts: ViolationCounts): String {
+    val chunks = mutableListOf<String>()
+    if (counts.codeViolationCount > 0) {
+        chunks += "Code next: ${penaltyForOffence(counts.codeViolationCount + 1)}"
+    }
+    if (counts.timeViolationCountServer > 0) {
+        chunks += "Server TV next: ${penaltyForOffence(counts.timeViolationCountServer + 1)}"
+    }
+    if (counts.timeViolationCountReceiver > 0) {
+        chunks += "Receiver TV next: ${penaltyForOffence(counts.timeViolationCountReceiver + 1)}"
+    }
+    return chunks.joinToString(" • ")
 }
 
 private fun displayPlayerLabel(player: PlayerRef): String {
@@ -1077,7 +1048,6 @@ private fun CourtDetailScheduledPreview() {
                     resultType = null,
                 ),
                 selectedServerPlayerId = 1,
-                availableCourts = listOf(1L to "Court 2", 2L to "Court 3"),
                 timerState = CourtTimerState(
                     courtId = 1,
                     matchId = 101,
@@ -1095,8 +1065,6 @@ private fun CourtDetailScheduledPreview() {
             onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
-            onMoveMatchToCourt = {},
-            onSwapWithCourt = {},
             onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
@@ -1147,8 +1115,6 @@ private fun CourtDetailCompletedPreview() {
             onStopTimer = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
-            onMoveMatchToCourt = {},
-            onSwapWithCourt = {},
             onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
