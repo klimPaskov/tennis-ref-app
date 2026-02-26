@@ -10,12 +10,18 @@
   - off-court allowance
   - medical timeout
   - equipment fix
+- Active warm-up and in-progress timers stay running when leaving court detail and are visible on the courts list card.
 - Timer start/stop/finish actions are logged as `EventLog` rows with `TIMER` type.
+- In-progress matches show a live elapsed stopwatch (from `startedAt` until completion).
 
 ## Violations
 - Violations open from a small icon button.
 - Violation counts are shown only inside the violation dialog.
 - Counts are displayed only for players that already have at least one recorded violation.
+- Violations are selected by violation name only, then confirmed in a second dialog that explains:
+  - current offence number
+  - penalty applied now
+  - next-step penalty guidance
 - Undo removes the latest violation event.
 - If there is nothing to undo, feedback is shown as a short snackbar (no persistent undo action).
 
@@ -29,5 +35,4 @@
 - Completed match header shows played duration from `startedAt` and `endedAt`.
 
 ## Court assignment actions
-- Court cards provide a `Next` action to assign the next unassigned scheduled match to that court.
 - Side swap in court detail is available before match start to correct left/right orientation.
