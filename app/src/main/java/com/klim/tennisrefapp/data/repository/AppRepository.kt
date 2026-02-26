@@ -1798,6 +1798,14 @@ class AppRepository @Inject constructor(
     private fun parseMatchPairFromCellLines(cellLines: List<OcrLine>): Pair<ParsedEntrant, ParsedEntrant>? {
         if (cellLines.isEmpty()) return null
 
+        val concatenatedPair = cellLines
+            .asSequence()
+            .mapNotNull { line -> extractConcatenatedPair(line.text) }
+            .firstOrNull()
+        if (concatenatedPair != null) {
+            return concatenatedPair
+        }
+
         val inlineCandidates = mutableListOf<Pair<ParsedEntrant, ParsedEntrant>>()
         cellLines.forEach { line ->
             val inline = extractInlinePair(line.text) ?: return@forEach
@@ -1815,15 +1823,14 @@ class AppRepository @Inject constructor(
 
         val vsIndex = cellLines.indexOfFirst { isVsToken(it.text) }
         if (vsIndex != -1) {
-            val leftRaw = cellLines
+            val leftCandidates = cellLines
                 .subList(0, vsIndex)
-                .asReversed()
-                .firstOrNull { isPotentialEntrantLine(it.text) }
-                ?.text
-            val rightRaw = cellLines
+                .filter { isPotentialEntrantLine(it.text) }
+            val rightCandidates = cellLines
                 .drop(vsIndex + 1)
-                .firstOrNull { isPotentialEntrantLine(it.text) }
-                ?.text
+                .filter { isPotentialEntrantLine(it.text) }
+            val leftRaw = bestEntrantRaw(leftCandidates, takeTail = true)
+            val rightRaw = bestEntrantRaw(rightCandidates, takeTail = false)
             if (!leftRaw.isNullOrBlank() && !rightRaw.isNullOrBlank()) {
                 val left = parseEntrant(leftRaw)
                 val right = parseEntrant(rightRaw)
@@ -1852,6 +1859,43 @@ class AppRepository @Inject constructor(
             }
         }
         return null
+    }
+
+    private fun extractConcatenatedPair(raw: String): Pair<ParsedEntrant, ParsedEntrant>? {
+        val normalized = raw.normalizeSpaces().trim()
+        if (normalized.isBlank()) return null
+        if (INLINE_VS_REGEX.containsMatchIn(normalized)) return null
+
+        val markerRegex = Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)\\s*(?:\\[[^\\]]*\\])?")
+        val markers = markerRegex.findAll(normalized).toList()
+        if (markers.size < 2) return null
+
+        val splitIndex = markers.first().range.last + 1
+        val leftRaw = normalized.substring(0, splitIndex).trim()
+        val rightRaw = normalized.substring(splitIndex).trim().trimStart('-', ':')
+        if (leftRaw.isBlank() || rightRaw.isBlank()) return null
+
+        val left = parseEntrant(leftRaw) ?: return null
+        val right = parseEntrant(rightRaw) ?: return null
+        if (left.name.equals(right.name, ignoreCase = true)) return null
+        return sanitizeSeedConflict(left, right, leftRaw, rightRaw)
+    }
+
+    private fun bestEntrantRaw(candidates: List<OcrLine>, takeTail: Boolean): String? {
+        if (candidates.isEmpty()) return null
+        val primary = if (takeTail) candidates.last() else candidates.first()
+        val pair = if (takeTail) candidates.takeLast(2) else candidates.take(2)
+        if (pair.size < 2) return primary.text
+
+        val mergedRaw = pair.joinToString(" ") { it.text }.normalizeSpaces().trim()
+        val merged = parseEntrant(mergedRaw)
+        val single = parseEntrant(primary.text)
+        return when {
+            merged == null -> primary.text
+            single == null -> mergedRaw
+            merged.name.split(' ').size >= single.name.split(' ').size -> mergedRaw
+            else -> primary.text
+        }
     }
 
     private fun selectFallbackEntrants(entries: List<ParsedEntrantLine>): Pair<ParsedEntrantLine, ParsedEntrantLine>? {
