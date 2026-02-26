@@ -1799,7 +1799,7 @@ class AppRepository @Inject constructor(
             val left = parseEntrant(inline.leftRaw) ?: return@forEach
             val right = parseEntrant(inline.rightRaw) ?: return@forEach
             if (!left.name.equals(right.name, ignoreCase = true)) {
-                inlineCandidates += left to right
+                inlineCandidates += sanitizeSeedConflict(left, right, inline.leftRaw, inline.rightRaw)
             }
         }
         if (inlineCandidates.isNotEmpty()) {
@@ -1823,7 +1823,7 @@ class AppRepository @Inject constructor(
                 val left = parseEntrant(leftRaw)
                 val right = parseEntrant(rightRaw)
                 if (left != null && right != null && !left.name.equals(right.name, ignoreCase = true)) {
-                    return left to right
+                    return sanitizeSeedConflict(left, right, leftRaw, rightRaw)
                 }
             }
         }
@@ -1834,7 +1834,7 @@ class AppRepository @Inject constructor(
             val left = fallbackEntrants[0]
             val right = fallbackEntrants[1]
             if (!left.name.equals(right.name, ignoreCase = true)) {
-                return left to right
+                return sanitizeSeedConflict(left, right, left.name, right.name)
             }
         }
         return null
@@ -1886,6 +1886,32 @@ class AppRepository @Inject constructor(
         return if (seed != null) "$name [$seed]" else name
     }
 
+    private fun sanitizeSeedConflict(
+        left: ParsedEntrant,
+        right: ParsedEntrant,
+        leftRaw: String,
+        rightRaw: String,
+    ): Pair<ParsedEntrant, ParsedEntrant> {
+        val leftSeed = left.seed
+        val rightSeed = right.seed
+        if (leftSeed == null || rightSeed == null || leftSeed != rightSeed) {
+            return left to right
+        }
+        val leftExplicit = hasExplicitSeedMarker(leftRaw)
+        val rightExplicit = hasExplicitSeedMarker(rightRaw)
+        return when {
+            leftExplicit && !rightExplicit -> left to right.copy(seed = null)
+            !leftExplicit && rightExplicit -> left.copy(seed = null) to right
+            else -> left to right.copy(seed = null)
+        }
+    }
+
+    private fun hasExplicitSeedMarker(raw: String): Boolean {
+        if (Regex("\\[(\\d{1,2})\\]").containsMatchIn(raw)) return true
+        val paren = Regex("\\((\\d{1,2})\\)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return paren != null && paren in 1..32
+    }
+
     private fun scheduleKeywordLabel(value: String): String? {
         val compact = value
             .lowercase()
@@ -1932,10 +1958,10 @@ class AppRepository @Inject constructor(
 
     private fun detectCountryCode(raw: String): String? {
         val candidates = mutableListOf<String>()
-        Regex("\\(([A-Za-z0-9]{2,6})\\)").findAll(raw).forEach { match ->
+        Regex("\\(\\s*([A-Za-z0-9|]{2,6})\\s*\\)").findAll(raw).forEach { match ->
             candidates += match.groupValues[1]
         }
-        Regex("\\b([A-Za-z0-9]{2,6})\\b").findAll(raw).forEach { match ->
+        Regex("\\b([A-Za-z0-9|]{2,6})\\b").findAll(raw).forEach { match ->
             candidates += match.groupValues[1]
         }
         return candidates.firstNotNullOfOrNull { normalizeCountryCodeToken(it) }
@@ -1955,7 +1981,11 @@ class AppRepository @Inject constructor(
             .toList()
             .asReversed()
         return tokens.firstNotNullOfOrNull { token ->
-            decodeSeedToken(token, countryCode)
+            if (token.any { it.isDigit() } || token.contains('[') || token.contains(']') || token.contains('|')) {
+                decodeSeedToken(token, countryCode)
+            } else {
+                null
+            }
         }
     }
 
@@ -2145,12 +2175,15 @@ class AppRepository @Inject constructor(
             if (leftRaw.isBlank() || rightRaw.isBlank()) return
             val left = parseEntrant(leftRaw) ?: return
             val right = parseEntrant(rightRaw) ?: return
-            val key = "${left.name.lowercase()}|${right.name.lowercase()}|$index"
+            val sanitized = sanitizeSeedConflict(left, right, leftRaw, rightRaw)
+            val leftNormalized = sanitized.first
+            val rightNormalized = sanitized.second
+            val key = "${leftNormalized.name.lowercase()}|${rightNormalized.name.lowercase()}|$index"
             if (!seen.add(key)) return
             val schedule = findScheduleContext(lines, index)
             pairs += ParsedPair(
-                left = left,
-                right = right,
+                left = leftNormalized,
+                right = rightNormalized,
                 scheduleLabel = schedule.label,
                 manualNotBefore = schedule.manualNotBefore,
             )
@@ -2282,7 +2315,7 @@ class AppRepository @Inject constructor(
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
             .replace(Regex("\\((\\d{1,2})\\)"), " ")
-            .replace(Regex("\\([A-Za-z0-9]{2,6}\\)"), " ")
+            .replace(Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)"), " ")
             .replace(Regex("(?i)\\b(?:GS|BS)\\b"), " ")
             .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
             .replace(Regex("(?i)^court\\s+[A-Za-z0-9]+\\s*"), "")
