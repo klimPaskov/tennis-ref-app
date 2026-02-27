@@ -668,10 +668,10 @@ private fun ScoreArgumentSolverDialog(
     detail: CourtDetail,
     onDismiss: () -> Unit,
 ) {
-    var leftOwnGames by remember { mutableStateOf("") }
-    var leftOpponentGames by remember { mutableStateOf("") }
-    var rightOwnGames by remember { mutableStateOf("") }
-    var rightOpponentGames by remember { mutableStateOf("") }
+    var leftClaimGamesA by remember { mutableStateOf("") }
+    var leftClaimGamesB by remember { mutableStateOf("") }
+    var rightClaimGamesA by remember { mutableStateOf("") }
+    var rightClaimGamesB by remember { mutableStateOf("") }
     var currentServerSide by remember { mutableStateOf<ResolverSide?>(null) }
     var resolution by remember { mutableStateOf<ScoreArgumentResolution?>(null) }
 
@@ -685,26 +685,22 @@ private fun ScoreArgumentSolverDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Enter each claim from that player's perspective: own games and opponent games.",
+                    text = "Enter each player's score claim from that player's perspective.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                ArgumentScoreRow(
+                ArgumentClaimRow(
                     label = "$leftName says",
-                    ownGames = leftOwnGames,
-                    opponentGames = leftOpponentGames,
-                    onOwnChange = { leftOwnGames = sanitizeScoreCell(it, maxDigits = 2) },
-                    onOpponentChange = { leftOpponentGames = sanitizeScoreCell(it, maxDigits = 2) },
+                    firstGames = leftClaimGamesA,
+                    secondGames = leftClaimGamesB,
+                    onFirstChange = { leftClaimGamesA = sanitizeScoreCell(it, maxDigits = 2) },
+                    onSecondChange = { leftClaimGamesB = sanitizeScoreCell(it, maxDigits = 2) },
                 )
-                ArgumentScoreRow(
+                ArgumentClaimRow(
                     label = "$rightName says",
-                    ownGames = rightOwnGames,
-                    opponentGames = rightOpponentGames,
-                    onOwnChange = { rightOwnGames = sanitizeScoreCell(it, maxDigits = 2) },
-                    onOpponentChange = { rightOpponentGames = sanitizeScoreCell(it, maxDigits = 2) },
-                )
-                Text(
-                    text = "Example: if both type 4 and 3, each means 4:3 to themselves.",
-                    style = MaterialTheme.typography.bodySmall,
+                    firstGames = rightClaimGamesA,
+                    secondGames = rightClaimGamesB,
+                    onFirstChange = { rightClaimGamesA = sanitizeScoreCell(it, maxDigits = 2) },
+                    onSecondChange = { rightClaimGamesB = sanitizeScoreCell(it, maxDigits = 2) },
                 )
                 Text("Who serves now?", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -748,8 +744,8 @@ private fun ScoreArgumentSolverDialog(
             Button(
                 onClick = {
                     resolution = resolveScoreArgument(
-                        leftClaim = "$leftOwnGames:$leftOpponentGames",
-                        rightClaim = "$rightOwnGames:$rightOpponentGames",
+                        leftClaim = "$leftClaimGamesA:$leftClaimGamesB",
+                        rightClaim = "$rightClaimGamesA:$rightClaimGamesB",
                         initialServer = initialServerSide,
                         currentServer = currentServerSide,
                         leftName = leftName,
@@ -767,12 +763,12 @@ private fun ScoreArgumentSolverDialog(
 }
 
 @Composable
-private fun ArgumentScoreRow(
+private fun ArgumentClaimRow(
     label: String,
-    ownGames: String,
-    opponentGames: String,
-    onOwnChange: (String) -> Unit,
-    onOpponentChange: (String) -> Unit,
+    firstGames: String,
+    secondGames: String,
+    onFirstChange: (String) -> Unit,
+    onSecondChange: (String) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     Text(
@@ -785,22 +781,17 @@ private fun ArgumentScoreRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = "Own",
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(36.dp),
-        )
         TextField(
-            value = ownGames,
+            value = firstGames,
             onValueChange = { raw ->
                 val sanitized = sanitizeScoreCell(raw, maxDigits = 2)
-                onOwnChange(sanitized)
-                if (ownGames.isEmpty() && sanitized.length == 1) {
+                onFirstChange(sanitized)
+                if (firstGames.isEmpty() && sanitized.length == 1) {
                     focusManager.moveFocus(FocusDirection.Next)
                 }
             },
             singleLine = true,
-            modifier = Modifier.width(68.dp),
+            modifier = Modifier.width(72.dp),
             textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
@@ -812,16 +803,16 @@ private fun ArgumentScoreRow(
         )
         Text(":", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         TextField(
-            value = opponentGames,
+            value = secondGames,
             onValueChange = { raw ->
                 val sanitized = sanitizeScoreCell(raw, maxDigits = 2)
-                onOpponentChange(sanitized)
-                if (opponentGames.isEmpty() && sanitized.length == 1) {
+                onSecondChange(sanitized)
+                if (secondGames.isEmpty() && sanitized.length == 1) {
                     focusManager.moveFocus(FocusDirection.Next)
                 }
             },
             singleLine = true,
-            modifier = Modifier.width(68.dp),
+            modifier = Modifier.width(72.dp),
             textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
@@ -830,12 +821,6 @@ private fun ArgumentScoreRow(
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Next) },
             ),
-        )
-        Text(
-            text = "Opp",
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(36.dp),
-            textAlign = TextAlign.End,
         )
     }
 }
