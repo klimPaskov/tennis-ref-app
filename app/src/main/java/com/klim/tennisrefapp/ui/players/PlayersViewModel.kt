@@ -22,6 +22,7 @@ enum class PlayersSort {
 data class PlayersUiState(
     val players: List<PlayerOverview> = emptyList(),
     val sort: PlayersSort = PlayersSort.NAME,
+    val query: String = "",
 )
 
 @HiltViewModel
@@ -29,23 +30,33 @@ class PlayersViewModel @Inject constructor(
     playerInsightsRepository: PlayerInsightsRepository,
 ) : ViewModel() {
     private val selectedSort = MutableStateFlow(PlayersSort.NAME)
+    private val searchQuery = MutableStateFlow("")
 
     val uiState: StateFlow<PlayersUiState> = combine(
         playerInsightsRepository.observePlayerOverviews(),
         selectedSort,
-    ) { players, sort ->
+        searchQuery,
+    ) { players, sort, query ->
+        val normalizedQuery = query.trim()
+        val filtered = if (normalizedQuery.isBlank()) {
+            players
+        } else {
+            players.filter { overview ->
+                overview.name.contains(normalizedQuery, ignoreCase = true)
+            }
+        }
         val sorted = when (sort) {
-            PlayersSort.NAME -> players.sortedBy { it.name }
-            PlayersSort.COMPLETED -> players.sortedWith(
+            PlayersSort.NAME -> filtered.sortedBy { it.name }
+            PlayersSort.COMPLETED -> filtered.sortedWith(
                 compareByDescending<PlayerOverview> { it.completedCount }
                     .thenBy { it.name },
             )
-            PlayersSort.NEXT_MATCH -> players.sortedWith(
+            PlayersSort.NEXT_MATCH -> filtered.sortedWith(
                 compareBy<PlayerOverview> { it.nextNotBeforeMillis ?: Long.MAX_VALUE }
                     .thenBy { it.name },
             )
         }
-        PlayersUiState(players = sorted, sort = sort)
+        PlayersUiState(players = sorted, sort = sort, query = query)
     }
         .stateIn(
             scope = viewModelScope,
@@ -55,5 +66,9 @@ class PlayersViewModel @Inject constructor(
 
     fun onSortSelected(sort: PlayersSort) {
         selectedSort.value = sort
+    }
+
+    fun onSearchQueryChanged(query: String) {
+        searchQuery.value = query
     }
 }

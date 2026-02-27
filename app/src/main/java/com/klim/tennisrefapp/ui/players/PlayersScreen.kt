@@ -22,6 +22,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -51,6 +52,7 @@ fun PlayersRoute(
         onBack = onBack,
         onPlayerClick = onPlayerClick,
         onSortSelected = viewModel::onSortSelected,
+        onSearchQueryChanged = viewModel::onSearchQueryChanged,
     )
 }
 
@@ -61,6 +63,7 @@ private fun PlayersScreen(
     onBack: () -> Unit,
     onPlayerClick: (Long) -> Unit,
     onSortSelected: (PlayersSort) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
 ) {
     var clicksEnabled by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -89,6 +92,15 @@ private fun PlayersScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item {
+                OutlinedTextField(
+                    value = uiState.query,
+                    onValueChange = onSearchQueryChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Search player") },
+                    singleLine = true,
+                )
+            }
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(PlayersSort.entries) { sort ->
