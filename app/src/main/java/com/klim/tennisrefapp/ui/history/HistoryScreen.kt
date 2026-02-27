@@ -116,6 +116,17 @@ private fun HistoryScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )
+                            match.winnerLabel?.takeIf { it.isNotBlank() }?.let { winner ->
+                                Text(
+                                    text = buildAnnotatedString {
+                                        append("Winner: ")
+                                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                            append(winner)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             matchDurationLabel(match.startedAtMillis, match.endedAtMillis)?.let { minutes ->
                                 Text(
                                     text = buildAnnotatedString {
