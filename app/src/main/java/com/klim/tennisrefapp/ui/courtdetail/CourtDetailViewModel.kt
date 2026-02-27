@@ -65,6 +65,7 @@ class CourtDetailViewModel @Inject constructor(
     private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
     private val restPrompt = MutableStateFlow<RestPrompt?>(null)
     private var warmupCompletedForMatchId: Long? = null
+    private var warmupStartedForMatchId: Long? = null
 
     private val detailFlow: Flow<CourtDetail?> = courtRepository.observeCourtDetail(courtId)
 
@@ -150,6 +151,7 @@ class CourtDetailViewModel @Inject constructor(
             matchRepository.swapSides(matchId)
             timerManager.stop(courtId)
             warmupCompletedForMatchId = null
+            warmupStartedForMatchId = null
             selectedServerPlayerId.value = null
             feedbackMessage.value = null
             restPrompt.value = null
@@ -171,6 +173,7 @@ class CourtDetailViewModel @Inject constructor(
 
         viewModelScope.launch {
             warmupCompletedForMatchId = matchId
+            warmupStartedForMatchId = null
             timerManager.stop(detail.courtId)
             val result = matchRepository.startMatch(
                 matchId = matchId,
@@ -293,8 +296,10 @@ class CourtDetailViewModel @Inject constructor(
         if (match.status != CourtStatus.SCHEDULED) return
         if (!match.canStartMatch || selectedServer == null) return
         if (warmupCompletedForMatchId == matchId) return
+        if (warmupStartedForMatchId == matchId) return
         if (timerState?.timerType == CourtTimerType.WARMUP) return
 
+        warmupStartedForMatchId = matchId
         timerManager.startOrRestart(
             courtId = match.courtId,
             matchId = matchId,
@@ -318,6 +323,7 @@ class CourtDetailViewModel @Inject constructor(
         if (warmupCompletedForMatchId == matchId) return
 
         warmupCompletedForMatchId = matchId
+        warmupStartedForMatchId = null
         val result = matchRepository.autoStartMatchFromWarmup(matchId)
         feedbackMessage.value = when (result) {
             StartMatchResult.Success -> UiFeedback("Warm-up finished. Match started.")
