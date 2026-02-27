@@ -1958,7 +1958,7 @@ class AppRepository @Inject constructor(
         }
         if (inlineCandidates.isNotEmpty()) {
             val best = inlineCandidates.maxWithOrNull(
-                compareBy<InlinePairCandidate>({ it.confidence }, { it.wordCount }),
+                compareBy<InlinePairCandidate>({ it.confidence }, { -it.wordCount }),
             )
             if (best != null) {
                 return best.left to best.right
@@ -2058,6 +2058,7 @@ class AppRepository @Inject constructor(
         return when {
             merged == null -> primary.text
             single == null -> mergedRaw
+            merged.name.split(' ').size > 4 -> primary.text
             !mergeLikelySplitEntrant -> primary.text
             merged.name.split(' ').size >= single.name.split(' ').size -> mergedRaw
             else -> primary.text
@@ -2304,14 +2305,18 @@ class AppRepository @Inject constructor(
     }
 
     private fun detectCountryCode(raw: String): String? {
-        val candidates = mutableListOf<String>()
-        Regex("\\(\\s*([A-Za-z0-9|]{2,6})\\s*\\)").findAll(raw).forEach { match ->
-            candidates += match.groupValues[1]
-        }
-        Regex("\\b([A-Za-z0-9|]{2,6})\\b").findAll(raw).forEach { match ->
-            candidates += match.groupValues[1]
-        }
-        return candidates.firstNotNullOfOrNull { normalizeCountryCodeToken(it) }
+        val parenthesized = Regex("\\(\\s*([A-Za-z0-9|]{2,6})\\s*\\)")
+            .findAll(raw)
+            .map { it.groupValues[1] }
+            .toList()
+        parenthesized.firstNotNullOfOrNull { normalizeCountryCodeToken(it, allowFuzzy = true) }?.let { return it }
+
+        val looseCandidates = Regex("\\b([A-Za-z0-9|]{2,6})\\b")
+            .findAll(raw)
+            .map { it.groupValues[1] }
+            .filter { token -> token == token.uppercase() || token.any { it in "|01258" } }
+            .toList()
+        return looseCandidates.firstNotNullOfOrNull { normalizeCountryCodeToken(it, allowFuzzy = false) }
     }
 
     private fun detectSeed(raw: String, countryCode: String?): Int? {
@@ -2321,6 +2326,11 @@ class AppRepository @Inject constructor(
         Regex("\\((\\d{1,2})\\)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { value ->
             if (value in 1..32) return value
         }
+        Regex("\\[\\s*([A-Za-z0-9|]{1,4})\\s*\\]").findAll(raw)
+            .mapNotNull { it.groupValues.getOrNull(1) }
+            .forEach { candidate ->
+                decodeSeedToken(candidate, countryCode)?.let { return it }
+            }
 
         val tokens = Regex("[A-Za-z0-9|\\[\\]]+")
             .findAll(raw.uppercase())
@@ -2328,16 +2338,7 @@ class AppRepository @Inject constructor(
             .toList()
             .asReversed()
         return tokens.firstNotNullOfOrNull { token ->
-            val seedLikeLetterToken = token.length in 2..4 &&
-                token.any { it in "IZSOBL" } &&
-                token.any { it.isLetter() }
-            if (
-                token.any { it.isDigit() } ||
-                token.contains('[') ||
-                token.contains(']') ||
-                token.contains('|') ||
-                seedLikeLetterToken
-            ) {
+            if (token.any { it.isDigit() } || token.contains('[') || token.contains(']') || token.contains('|')) {
                 decodeSeedToken(token, countryCode)
             } else {
                 null
@@ -2353,7 +2354,7 @@ class AppRepository @Inject constructor(
             .replace('|', 'I')
             .uppercase()
 
-        if (normalizeCountryCodeToken(compact) != null) return null
+        if (normalizeCountryCodeToken(compact, allowFuzzy = false) != null) return null
         val iso2 = ISO3_TO_ISO2[countryCode].orEmpty()
         if (compact == countryCode || compact == iso2) return null
 
@@ -2384,7 +2385,7 @@ class AppRepository @Inject constructor(
         return null
     }
 
-    private fun normalizeCountryCodeToken(token: String): String? {
+    private fun normalizeCountryCodeToken(token: String, allowFuzzy: Boolean = true): String? {
         if (token.isBlank()) return null
         val corrected = token
             .uppercase()
@@ -2414,9 +2415,11 @@ class AppRepository @Inject constructor(
         val direct = variants.firstOrNull { candidate ->
             candidate in ISO3_TO_ISO2.keys || candidate in ISO2_CODES
         }
-        val resolved = direct ?: variants
-            .mapNotNull { variant -> bestIso3Match(variant) }
-            .firstOrNull()
+        val resolved = when {
+            direct != null -> direct
+            allowFuzzy -> variants.mapNotNull { variant -> bestIso3Match(variant) }.firstOrNull()
+            else -> null
+        }
 
         return resolved?.let { candidate ->
             if (candidate.length == 2) {
@@ -2466,7 +2469,7 @@ class AppRepository @Inject constructor(
                 !token.equals("VS", ignoreCase = true)
         }.toMutableList()
 
-        while (filtered.size >= 2 && isLikelyNoiseNameToken(filtered.last())) {
+        while (filtered.size >= 3 && isLikelyNoiseNameToken(filtered.last())) {
             filtered.removeAt(filtered.lastIndex)
         }
         return filtered
@@ -2701,6 +2704,7 @@ class AppRepository @Inject constructor(
             }
         val normalizedTokens = cleanupNameTokens(tokens)
         if (normalizedTokens.isEmpty()) return null
+        if (normalizedTokens.size == 1 && matchedCountry == null) return null
         if (normalizedTokens.size == 1 && normalizedTokens.first().length < 4) return null
         val name = normalizePersonNameCase(normalizedTokens.joinToString(" ").normalizeSpaces())
         if (name.isBlank()) return null
@@ -2718,7 +2722,7 @@ class AppRepository @Inject constructor(
         val iso2 = ISO3_TO_ISO2[matched]
         if (cleaned == matched || cleaned == iso2) return true
         if (cleaned.length !in 2..4) return false
-        val normalized = normalizeCountryCodeToken(cleaned) ?: return false
+        val normalized = normalizeCountryCodeToken(cleaned, allowFuzzy = false) ?: return false
         return normalized == matched || normalized == iso2
     }
 
@@ -3001,7 +3005,7 @@ class AppRepository @Inject constructor(
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
-        const val ROW_RECOVERY_MARGIN = 14f
+        const val ROW_RECOVERY_MARGIN = 20f
         const val PDF_OCR_MAX_PAGES = 2
         const val PDF_OCR_RENDER_SCALE = 2.3f
         const val PDF_OCR_MAX_DIMENSION = 3200
