@@ -19,6 +19,9 @@ data class SideParticipant(
     val players: List<PlayerRef>,
     val resolvedTeamId: Long?,
     val isResolved: Boolean,
+    val dependencyMatchId: Long? = null,
+    val dependencyCourtId: Long? = null,
+    val dependencyLabel: String? = null,
 )
 
 data class CourtCard(

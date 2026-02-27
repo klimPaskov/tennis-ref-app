@@ -72,6 +72,11 @@ fun TennisRefNavGraph(
         ) {
             CourtDetailRoute(
                 onBack = { navController.popBackStack() },
+                onOpenCourt = { courtId ->
+                    navController.navigate("$COURT_DETAIL_ROUTE/$courtId") {
+                        launchSingleTop = true
+                    }
+                },
             )
         }
         composable(route = HISTORY_ROUTE) {

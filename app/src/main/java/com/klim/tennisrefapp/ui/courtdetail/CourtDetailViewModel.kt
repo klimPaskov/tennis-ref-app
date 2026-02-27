@@ -13,6 +13,7 @@ import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.model.RestPrompt
+import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.CourtRepository
@@ -57,6 +58,7 @@ data class UiFeedback(
 
 sealed interface CourtDetailNavigationEvent {
     data object BackToCourts : CourtDetailNavigationEvent
+    data class OpenCourt(val courtId: Long) : CourtDetailNavigationEvent
 }
 
 @HiltViewModel
@@ -257,6 +259,14 @@ class CourtDetailViewModel @Inject constructor(
         feedbackMessage.value = UiFeedback("Medical timeout started for ${player.name}.")
     }
 
+    fun onOpenDependencyCourt(courtId: Long?) {
+        if (courtId == null || courtId <= 0L) {
+            feedbackMessage.value = UiFeedback("Source court is not assigned yet.")
+            return
+        }
+        _navigationEvents.tryEmit(CourtDetailNavigationEvent.OpenCourt(courtId))
+    }
+
     fun onSaveLiveScoreSnapshot(rawScore: String) {
         val detail = uiState.value.detail ?: return
         val matchId = detail.matchId ?: return
@@ -267,14 +277,32 @@ class CourtDetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
+            val leftName = sideName(detail.leftSide).replace("|", "/")
+            val rightName = sideName(detail.rightSide).replace("|", "/")
             eventLogRepository.logEvent(
                 matchId = matchId,
                 courtId = detail.courtId,
                 kind = MatchEventKind.TIMER,
                 offenderPlayerId = null,
-                message = "SCORE_SNAPSHOT|$score",
+                message = "SCORE_SNAPSHOT|$score|left=$leftName|right=$rightName",
             )
             feedbackMessage.value = UiFeedback("Live score saved: $score")
+        }
+    }
+
+    fun onLogScoreArgument(summary: String) {
+        val detail = uiState.value.detail ?: return
+        val matchId = detail.matchId ?: return
+        if (summary.isBlank()) return
+        viewModelScope.launch {
+            eventLogRepository.logEvent(
+                matchId = matchId,
+                courtId = detail.courtId,
+                kind = MatchEventKind.TIMER,
+                offenderPlayerId = null,
+                message = "ARGUMENT|$summary",
+            )
+            feedbackMessage.value = UiFeedback("Argument saved to log.")
         }
     }
 
@@ -515,6 +543,14 @@ class CourtDetailViewModel @Inject constructor(
             .trim()
             .replace(Regex("\\s+"), " ")
             .replace("-", ":")
+    }
+
+    private fun sideName(side: SideParticipant?): String {
+        val players = side?.players.orEmpty()
+        if (players.isNotEmpty()) {
+            return players.joinToString(" / ") { player -> player.name }
+        }
+        return side?.label ?: "TBD"
     }
 
     private companion object {

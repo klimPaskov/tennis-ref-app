@@ -1916,6 +1916,9 @@ class AppRepository @Inject constructor(
 
             SlotType.WINNER_OF_MATCH -> {
                 val winnerOfMatch = slot.winnerOfMatchId
+                val sourceMatch = winnerOfMatch?.let { sourceId ->
+                    context.matches.firstOrNull { candidate -> candidate.id == sourceId }
+                }
                 val resolution = resolveSlotUseCase(
                     SlotReference.WinnerOfMatch(winnerOfMatch ?: -1L),
                     context.matches.associate { candidate ->
@@ -1937,6 +1940,12 @@ class AppRepository @Inject constructor(
                     players = players,
                     resolvedTeamId = resolution.resolvedTeamId,
                     isResolved = resolution.isResolved,
+                    dependencyMatchId = winnerOfMatch,
+                    dependencyCourtId = sourceMatch?.courtId,
+                    dependencyLabel = sourceMatch?.let { match ->
+                        val sourceCourt = match.courtId?.let { "Court $it" } ?: "Unassigned court"
+                        "Winner from $sourceCourt • ${formatMatchLabel(match, context)}"
+                    },
                 )
             }
 

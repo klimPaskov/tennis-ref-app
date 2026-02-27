@@ -190,6 +190,7 @@ private val inProgressTimers = listOf(
 @Composable
 fun CourtDetailRoute(
     onBack: () -> Unit,
+    onOpenCourt: (Long) -> Unit,
     viewModel: CourtDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -199,6 +200,7 @@ fun CourtDetailRoute(
         viewModel.navigationEvents.collect { event ->
             when (event) {
                 CourtDetailNavigationEvent.BackToCourts -> onBack()
+                is CourtDetailNavigationEvent.OpenCourt -> onOpenCourt(event.courtId)
             }
         }
     }
@@ -227,9 +229,11 @@ fun CourtDetailRoute(
         onStartTimer = viewModel::onStartTimer,
         onStopTimer = viewModel::onStopTimer,
         onStartMedicalTimeout = viewModel::onStartMedicalTimeout,
+        onOpenDependencyCourt = viewModel::onOpenDependencyCourt,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
         onSaveLiveScoreSnapshot = viewModel::onSaveLiveScoreSnapshot,
+        onLogScoreArgument = viewModel::onLogScoreArgument,
         onDismissRestPrompt = viewModel::onDismissRestPrompt,
         onApplyRestChoices = viewModel::onApplyRestChoices,
         snackbarHostState = snackbarHostState,
@@ -247,9 +251,11 @@ private fun CourtDetailScreen(
     onStartTimer: (CourtTimerType) -> Unit,
     onStopTimer: () -> Unit,
     onStartMedicalTimeout: (Long) -> Unit,
+    onOpenDependencyCourt: (Long?) -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
     onSaveLiveScoreSnapshot: (String) -> Unit,
+    onLogScoreArgument: (String) -> Unit,
     onDismissRestPrompt: () -> Unit,
     onApplyRestChoices: (Map<Long, Int>) -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -302,6 +308,7 @@ private fun CourtDetailScreen(
                 selectedServerPlayerId = uiState.selectedServerPlayerId,
                 onSelectServer = onSelectServer,
                 onSwapSides = onSwapSides,
+                onOpenDependencyCourt = onOpenDependencyCourt,
             )
 
             when (detail.status) {
@@ -366,6 +373,7 @@ private fun CourtDetailScreen(
     if (showArgumentDialog && detail != null) {
         ScoreArgumentSolverDialog(
             detail = detail,
+            onSolve = onLogScoreArgument,
             onDismiss = { showArgumentDialog = false },
         )
     }
@@ -399,6 +407,8 @@ private fun CourtDetailScreen(
         LiveScoreSnapshotDialog(
             initialScore = latestLiveScoreSnapshotValue(uiState.matchEvents),
             isDoublesMatch = detail?.let(::isDoublesMatch) == true,
+            leftName = sidePrimaryLabel(detail?.leftSide),
+            rightName = sidePrimaryLabel(detail?.rightSide),
             onDismiss = { showLiveScoreDialog = false },
             onSave = { score ->
                 onSaveLiveScoreSnapshot(score)
@@ -506,6 +516,7 @@ private fun SidePanels(
     selectedServerPlayerId: Long?,
     onSelectServer: (Long) -> Unit,
     onSwapSides: () -> Unit,
+    onOpenDependencyCourt: (Long?) -> Unit,
 ) {
     val leftRows = detail.leftSide?.players?.size ?: 1
     val rightRows = detail.rightSide?.players?.size ?: 1
@@ -525,6 +536,7 @@ private fun SidePanels(
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
             onSelectServer = onSelectServer,
+            onOpenDependencyCourt = onOpenDependencyCourt,
             isWinner = detail.status == CourtStatus.COMPLETED && detail.leftSide?.resolvedTeamId == detail.winnerTeamId,
         )
         FilledTonalIconButton(
@@ -542,6 +554,7 @@ private fun SidePanels(
             selectedServerPlayerId = selectedServerPlayerId,
             canSelectServer = detail.canStartMatch,
             onSelectServer = onSelectServer,
+            onOpenDependencyCourt = onOpenDependencyCourt,
             isWinner = detail.status == CourtStatus.COMPLETED && detail.rightSide?.resolvedTeamId == detail.winnerTeamId,
         )
     }
@@ -705,6 +718,8 @@ private fun MedicalTimeoutDialog(
 private fun LiveScoreSnapshotDialog(
     initialScore: String?,
     isDoublesMatch: Boolean,
+    leftName: String,
+    rightName: String,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
 ) {
@@ -735,6 +750,27 @@ private fun LiveScoreSnapshotDialog(
         title = { Text("Save Live Score") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Perspective: Left vs Right side on this court.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Left: $leftName",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "Right: $rightName",
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 ScoreSetRow(
                     label = "Set 1",
                     left = set1Left,
@@ -945,6 +981,7 @@ private fun ViolationDialog(
 @Composable
 private fun ScoreArgumentSolverDialog(
     detail: CourtDetail,
+    onSolve: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var leftClaimGamesA by remember { mutableStateOf("") }
@@ -1022,7 +1059,7 @@ private fun ScoreArgumentSolverDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    resolution = resolveScoreArgument(
+                    val result = resolveScoreArgument(
                         leftClaim = "$leftClaimGamesA:$leftClaimGamesB",
                         rightClaim = "$rightClaimGamesA:$rightClaimGamesB",
                         initialServer = initialServerSide,
@@ -1030,6 +1067,26 @@ private fun ScoreArgumentSolverDialog(
                         leftName = leftName,
                         rightName = rightName,
                     )
+                    resolution = result
+                    val leftClaim = "$leftClaimGamesA:$leftClaimGamesB"
+                    val rightClaim = "$rightClaimGamesA:$rightClaimGamesB"
+                    val serverLabel = when (currentServerSide) {
+                        ResolverSide.LEFT -> leftName
+                        ResolverSide.RIGHT -> rightName
+                        null -> "Unknown"
+                    }
+                    val summary = buildString {
+                        append("left=")
+                        append("$leftName $leftClaim".replace("|", "/"))
+                        append("|right=")
+                        append("$rightName $rightClaim".replace("|", "/"))
+                        append("|server=")
+                        append(serverLabel.replace("|", "/"))
+                        append("|result=")
+                        append("${result.title}: ${result.details}".replace("|", "/"))
+                    }
+                    onSolve(summary)
+                    onDismiss()
                 },
             ) {
                 Text("Solve")
@@ -1295,6 +1352,7 @@ private fun ParticipantSideCard(
     selectedServerPlayerId: Long?,
     canSelectServer: Boolean,
     onSelectServer: (Long) -> Unit,
+    onOpenDependencyCourt: (Long?) -> Unit,
     isWinner: Boolean,
 ) {
     Card(
@@ -1361,12 +1419,32 @@ private fun ParticipantSideCard(
                     }
                 }
             } else {
-                Text(
-                    text = side?.label ?: "TBD",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                )
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = side?.label ?: "TBD",
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    side?.dependencyLabel
+                        ?.takeIf { label -> label.isNotBlank() }
+                        ?.let { label ->
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    if ((side?.label == "TBD" || side?.players.isNullOrEmpty()) && side?.dependencyCourtId != null) {
+                        OutlinedButton(onClick = { onOpenDependencyCourt(side.dependencyCourtId) }) {
+                            Text("Open Source Court")
+                        }
+                    }
+                }
             }
         }
     }
@@ -1913,7 +1991,8 @@ private fun latestLiveScoreSnapshotValue(events: List<MatchEvent>): String? {
         event.kind == MatchEventKind.TIMER &&
             event.message?.startsWith("SCORE_SNAPSHOT|") == true
     } ?: return null
-    val score = latest.message?.substringAfter("SCORE_SNAPSHOT|")?.trim().orEmpty()
+    val payload = latest.message?.substringAfter("SCORE_SNAPSHOT|").orEmpty()
+    val score = payload.substringBefore("|").trim()
     return score.ifBlank { null }
 }
 
@@ -2035,6 +2114,7 @@ private fun ParticipantSideCardPreview() {
                 selectedServerPlayerId = 2,
                 canSelectServer = true,
                 onSelectServer = {},
+                onOpenDependencyCourt = {},
                 isWinner = false,
             )
         }
@@ -2094,9 +2174,11 @@ private fun CourtDetailScheduledPreview() {
             onStartTimer = {},
             onStopTimer = {},
             onStartMedicalTimeout = {},
+            onOpenDependencyCourt = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
             onSaveLiveScoreSnapshot = {},
+            onLogScoreArgument = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
             snackbarHostState = SnackbarHostState(),
@@ -2148,9 +2230,11 @@ private fun CourtDetailCompletedPreview() {
             onStartTimer = {},
             onStopTimer = {},
             onStartMedicalTimeout = {},
+            onOpenDependencyCourt = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
             onSaveLiveScoreSnapshot = {},
+            onLogScoreArgument = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
             snackbarHostState = SnackbarHostState(),
