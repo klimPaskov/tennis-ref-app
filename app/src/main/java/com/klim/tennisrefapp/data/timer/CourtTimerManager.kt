@@ -75,6 +75,14 @@ class CourtTimerManager @Inject constructor(
         courtName: String,
         timerType: CourtTimerType,
     ) {
+        val running = state.value[courtId]
+        if (running != null &&
+            running.isRunning &&
+            running.matchId == matchId &&
+            running.timerType == timerType
+        ) {
+            return
+        }
         stop(courtId)
         CourtTimerAlerts.ensureChannel(appContext)
         val endAtMillis = System.currentTimeMillis() + timerType.durationMillis
@@ -89,6 +97,7 @@ class CourtTimerManager @Inject constructor(
         CourtTimerPersistence.save(appContext, timer)
         scheduleFinishWorker(timer)
         scheduleFinishAlarm(timer)
+        scheduleWarningAlarm(timer)
         logTimerEvent(courtId, matchId, timerType, "START")
         launchTicker(timer)
     }
@@ -98,9 +107,11 @@ class CourtTimerManager @Inject constructor(
         timerJobs.remove(courtId)?.cancel()
         cancelFinishWorker(courtId)
         cancelFinishAlarm(courtId)
+        cancelWarningAlarm(courtId)
+        CourtTimerAlerts.cancelWarning(appContext, courtId)
         CourtTimerPersistence.remove(appContext, courtId)
         state.value = state.value.toMutableMap().also { map -> map.remove(courtId) }
-        if (current != null && current.isRunning) {
+        if (current != null && current.isRunning && current.timerType != CourtTimerType.WARMUP) {
             logTimerEvent(courtId, current.matchId, current.timerType, "STOP")
         }
     }
@@ -148,7 +159,7 @@ class CourtTimerManager @Inject constructor(
         timerJobs[timer.courtId] = job
     }
 
-    private fun scheduleFinishWorker(timer: PersistedCourtTimer) {
+    private fun scheduleFinishWorker(timer: PersistedCourtTimer, skipAlert: Boolean = false) {
         val delay = max(0L, timer.endAtMillis - System.currentTimeMillis())
         val request = OneTimeWorkRequestBuilder<CourtTimerFinishedWorker>()
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
@@ -158,6 +169,8 @@ class CourtTimerManager @Inject constructor(
                     .putLong(CourtTimerFinishedWorker.KEY_MATCH_ID, timer.matchId)
                     .putString(CourtTimerFinishedWorker.KEY_COURT_NAME, timer.courtName)
                     .putString(CourtTimerFinishedWorker.KEY_TIMER_TYPE, timer.timerType.name)
+                    .putBoolean(CourtTimerFinishedWorker.KEY_SKIP_ALERT, skipAlert)
+                    .putLong(CourtTimerFinishedWorker.KEY_END_AT, timer.endAtMillis)
                     .build(),
             )
             .build()
@@ -172,11 +185,14 @@ class CourtTimerManager @Inject constructor(
         val triggerAtMillis = timer.endAtMillis.coerceAtLeast(System.currentTimeMillis())
         val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pendingIntent = timerAlarmPendingIntent(
+            action = CourtTimerAlarmReceiver.ACTION_TIMER_FINISH,
             courtId = timer.courtId,
             matchId = timer.matchId,
             courtName = timer.courtName,
             timerType = timer.timerType,
+            endAtMillis = timer.endAtMillis,
             updateCurrent = true,
+            warning = false,
         ) ?: return
         runCatching {
             when {
@@ -196,6 +212,39 @@ class CourtTimerManager @Inject constructor(
         }
     }
 
+    private fun scheduleWarningAlarm(timer: PersistedCourtTimer) {
+        if (timer.timerType != CourtTimerType.WARMUP) return
+        val warningAtMillis = timer.endAtMillis - 60_000L
+        if (warningAtMillis <= System.currentTimeMillis()) return
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = timerAlarmPendingIntent(
+            action = CourtTimerAlarmReceiver.ACTION_TIMER_WARNING,
+            courtId = timer.courtId,
+            matchId = timer.matchId,
+            courtName = timer.courtName,
+            timerType = timer.timerType,
+            endAtMillis = timer.endAtMillis,
+            updateCurrent = true,
+            warning = true,
+        ) ?: return
+        runCatching {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms() ->
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                else ->
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+            }
+        }.getOrElse {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+            } else {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+            }
+        }
+    }
+
     private fun cancelFinishWorker(courtId: Long) {
         workManager.cancelUniqueWork(CourtTimerFinishedWorker.workName(courtId))
     }
@@ -203,34 +252,57 @@ class CourtTimerManager @Inject constructor(
     private fun cancelFinishAlarm(courtId: Long) {
         val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pendingIntent = timerAlarmPendingIntent(
+                action = CourtTimerAlarmReceiver.ACTION_TIMER_FINISH,
                 courtId = courtId,
                 matchId = 0L,
                 courtName = "",
                 timerType = CourtTimerType.WARMUP,
+                endAtMillis = 0L,
                 updateCurrent = false,
+                warning = false,
             ) ?: return
         alarmManager.cancel(pendingIntent)
     }
 
+    private fun cancelWarningAlarm(courtId: Long) {
+        val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = timerAlarmPendingIntent(
+            action = CourtTimerAlarmReceiver.ACTION_TIMER_WARNING,
+            courtId = courtId,
+            matchId = 0L,
+            courtName = "",
+            timerType = CourtTimerType.WARMUP,
+            endAtMillis = 0L,
+            updateCurrent = false,
+            warning = true,
+        ) ?: return
+        alarmManager.cancel(pendingIntent)
+    }
+
     private fun timerAlarmPendingIntent(
+        action: String,
         courtId: Long,
         matchId: Long,
         courtName: String,
         timerType: CourtTimerType,
+        endAtMillis: Long,
         updateCurrent: Boolean,
+        warning: Boolean,
     ): PendingIntent? {
         val intent = Intent(appContext, CourtTimerAlarmReceiver::class.java).apply {
-            action = CourtTimerAlarmReceiver.ACTION_TIMER_FINISH
+            this.action = action
             putExtra(CourtTimerAlarmReceiver.EXTRA_COURT_ID, courtId)
             putExtra(CourtTimerAlarmReceiver.EXTRA_MATCH_ID, matchId)
             putExtra(CourtTimerAlarmReceiver.EXTRA_COURT_NAME, courtName)
             putExtra(CourtTimerAlarmReceiver.EXTRA_TIMER_TYPE, timerType.name)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_END_AT, endAtMillis)
         }
         val flags = (if (updateCurrent) PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_NO_CREATE) or
             PendingIntent.FLAG_IMMUTABLE
+        val requestCodeOffset = if (warning) 50_000 else 10_000
         return PendingIntent.getBroadcast(
             appContext,
-            courtId.toInt(),
+            courtId.toInt() + requestCodeOffset,
             intent,
             flags,
         )
@@ -240,8 +312,6 @@ class CourtTimerManager @Inject constructor(
         val now = System.currentTimeMillis()
         CourtTimerPersistence.loadAll(appContext).forEach { timer ->
             if (timer.endAtMillis <= now) {
-                scheduleFinishWorker(timer.copy(endAtMillis = now))
-                scheduleFinishAlarm(timer.copy(endAtMillis = now))
                 state.value = state.value.toMutableMap().also { map ->
                     map[timer.courtId] = CourtTimerState(
                         courtId = timer.courtId,
@@ -252,8 +322,10 @@ class CourtTimerManager @Inject constructor(
                         isRunning = false,
                     )
                 }
+                scheduleFinishWorker(timer, skipAlert = true)
             } else {
                 scheduleFinishAlarm(timer)
+                scheduleWarningAlarm(timer)
                 launchTicker(timer)
             }
         }

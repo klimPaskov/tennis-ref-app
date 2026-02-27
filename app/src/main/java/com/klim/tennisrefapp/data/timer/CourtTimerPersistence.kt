@@ -35,24 +35,52 @@ internal object CourtTimerPersistence {
         prefs(context).edit().remove(key(courtId)).apply()
     }
 
+    fun load(context: Context, courtId: Long): PersistedCourtTimer? {
+        val raw = prefs(context).getString(key(courtId), null) ?: return null
+        return parse(raw)
+    }
+
+    fun consumeIfMatches(
+        context: Context,
+        courtId: Long,
+        matchId: Long,
+        timerType: CourtTimerType,
+        expectedEndAtMillis: Long,
+        toleranceMillis: Long = 1_500L,
+    ): PersistedCourtTimer? = synchronized(this) {
+        val store = prefs(context)
+        val raw = store.getString(key(courtId), null) ?: return@synchronized null
+        val parsed = parse(raw) ?: return@synchronized null
+        val matches = parsed.matchId == matchId &&
+            parsed.timerType == timerType &&
+            (expectedEndAtMillis <= 0L || kotlin.math.abs(parsed.endAtMillis - expectedEndAtMillis) <= toleranceMillis)
+        if (!matches) return@synchronized null
+        store.edit().remove(key(courtId)).commit()
+        return@synchronized parsed
+    }
+
     fun loadAll(context: Context): List<PersistedCourtTimer> {
         return prefs(context).all
             .asSequence()
             .filter { it.key.startsWith(KEY_PREFIX) }
             .mapNotNull { (_, value) ->
                 val raw = value as? String ?: return@mapNotNull null
-                runCatching {
-                    val json = JSONObject(raw)
-                    PersistedCourtTimer(
-                        courtId = json.getLong(FIELD_COURT_ID),
-                        matchId = json.getLong(FIELD_MATCH_ID),
-                        courtName = json.getString(FIELD_COURT_NAME),
-                        timerType = CourtTimerType.valueOf(json.getString(FIELD_TIMER_TYPE)),
-                        endAtMillis = json.getLong(FIELD_END_AT),
-                    )
-                }.getOrNull()
+                parse(raw)
             }
             .toList()
+    }
+
+    private fun parse(raw: String): PersistedCourtTimer? {
+        return runCatching {
+            val json = JSONObject(raw)
+            PersistedCourtTimer(
+                courtId = json.getLong(FIELD_COURT_ID),
+                matchId = json.getLong(FIELD_MATCH_ID),
+                courtName = json.getString(FIELD_COURT_NAME),
+                timerType = CourtTimerType.valueOf(json.getString(FIELD_TIMER_TYPE)),
+                endAtMillis = json.getLong(FIELD_END_AT),
+            )
+        }.getOrNull()
     }
 
     private fun key(courtId: Long): String = KEY_PREFIX + courtId

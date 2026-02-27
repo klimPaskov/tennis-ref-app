@@ -20,6 +20,7 @@ import com.klim.tennisrefapp.MainActivity
 internal const val COURT_TIMER_CHANNEL_ID = "court_timer_channel_v2"
 internal const val COURT_TIMER_CHANNEL_NAME = "Court Timer"
 private const val COURT_TIMER_NOTIFICATION_BASE_ID = 10000
+private const val COURT_TIMER_WARNING_NOTIFICATION_BASE_ID = 20000
 
 internal object CourtTimerAlerts {
     fun ensureChannel(context: Context) {
@@ -49,38 +50,49 @@ internal object CourtTimerAlerts {
         notify(context, courtId, courtName, timerType)
     }
 
+    fun notifyWarning(
+        context: Context,
+        courtId: Long,
+        courtName: String,
+        timerType: CourtTimerType,
+        remainingLabel: String,
+    ) {
+        ensureChannel(context)
+        if (!canPostNotifications(context)) return
+        val openCourtPendingIntent = openCourtPendingIntent(context, courtId)
+        val notification = NotificationCompat.Builder(context, COURT_TIMER_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("$courtName $remainingLabel")
+            .setContentText("${timerType.label} in progress")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(openCourtPendingIntent)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context)
+            .notify(COURT_TIMER_WARNING_NOTIFICATION_BASE_ID + courtId.toInt(), notification)
+    }
+
+    fun cancelWarning(context: Context, courtId: Long) {
+        NotificationManagerCompat.from(context)
+            .cancel(COURT_TIMER_WARNING_NOTIFICATION_BASE_ID + courtId.toInt())
+    }
+
     private fun notify(
         context: Context,
         courtId: Long,
         courtName: String,
         timerType: CourtTimerType,
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) return
-        }
+        if (!canPostNotifications(context)) return
 
         val pattern = if (timerType == CourtTimerType.WARMUP) {
             longArrayOf(0L, 220L, 140L, 220L)
         } else {
             longArrayOf(0L, 220L)
         }
-        val openCourtIntent = Intent(context, MainActivity::class.java).apply {
-            action = MainActivity.ACTION_OPEN_COURT
-            putExtra(MainActivity.EXTRA_OPEN_COURT_ID, courtId)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val openCourtPendingIntent = PendingIntent.getActivity(
-            context,
-            courtId.toInt(),
-            openCourtIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        val openCourtPendingIntent = openCourtPendingIntent(context, courtId)
 
         val notification = NotificationCompat.Builder(context, COURT_TIMER_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
@@ -97,6 +109,30 @@ internal object CourtTimerAlerts {
 
         NotificationManagerCompat.from(context)
             .notify(COURT_TIMER_NOTIFICATION_BASE_ID + courtId.toInt(), notification)
+    }
+
+    private fun canPostNotifications(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun openCourtPendingIntent(context: Context, courtId: Long): PendingIntent {
+        val openCourtIntent = Intent(context, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_OPEN_COURT
+            putExtra(MainActivity.EXTRA_OPEN_COURT_ID, courtId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            courtId.toInt(),
+            openCourtIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 
     private fun vibrate(context: Context, pulses: Int) {

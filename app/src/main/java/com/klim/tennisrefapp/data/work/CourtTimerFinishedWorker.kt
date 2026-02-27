@@ -26,6 +26,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val courtName = inputData.getString(KEY_COURT_NAME).orEmpty()
         val timerTypeName = inputData.getString(KEY_TIMER_TYPE).orEmpty()
         val skipAlert = inputData.getBoolean(KEY_SKIP_ALERT, false)
+        val expectedEndAtMillis = inputData.getLong(KEY_END_AT, -1L)
 
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) {
             return Result.success()
@@ -34,6 +35,20 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val timerType = runCatching { CourtTimerType.valueOf(timerTypeName) }.getOrNull()
             ?: return Result.success()
 
+        val persisted = CourtTimerPersistence.consumeIfMatches(
+            context = applicationContext,
+            courtId = courtId,
+            matchId = matchId,
+            timerType = timerType,
+            expectedEndAtMillis = expectedEndAtMillis,
+        ) ?: return Result.success()
+
+        val now = System.currentTimeMillis()
+        if (now + 1_500L < persisted.endAtMillis) {
+            return Result.success()
+        }
+
+        CourtTimerAlerts.cancelWarning(applicationContext, courtId)
         if (!skipAlert) {
             CourtTimerAlerts.notifyFinished(
                 context = applicationContext,
@@ -52,7 +67,6 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         if (timerType == CourtTimerType.WARMUP) {
             matchRepository.autoStartMatchFromWarmup(matchId)
         }
-        CourtTimerPersistence.remove(applicationContext, courtId)
         return Result.success()
     }
 
@@ -62,6 +76,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         const val KEY_COURT_NAME = "court_name"
         const val KEY_TIMER_TYPE = "timer_type"
         const val KEY_SKIP_ALERT = "skip_alert"
+        const val KEY_END_AT = "end_at"
 
         fun workName(courtId: Long): String = "court_timer_finish_$courtId"
     }
