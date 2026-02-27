@@ -2058,11 +2058,28 @@ class AppRepository @Inject constructor(
         return when {
             merged == null -> primary.text
             single == null -> mergedRaw
-            merged.name.split(' ').size > 4 -> primary.text
             !mergeLikelySplitEntrant -> primary.text
-            merged.name.split(' ').size >= single.name.split(' ').size -> mergedRaw
+            entrantParseConfidence(merged, mergedRaw) >= entrantParseConfidence(single, primary.text) -> mergedRaw
             else -> primary.text
         }
+    }
+
+    private fun entrantParseConfidence(entrant: ParsedEntrant, raw: String): Int {
+        val words = entrant.name.split(' ').filter { it.isNotBlank() }
+        val wordQuality = words.fold(0) { acc, word ->
+            acc + when {
+                word.length <= 1 -> -3
+                word.length in 2..18 -> 2
+                else -> 1
+            }
+        }
+        val countryQuality = when {
+            entrant.countryCode != null && hasCountryMarker(raw) -> 4
+            entrant.countryCode != null -> 2
+            else -> 0
+        }
+        val seedQuality = if (entrant.seed != null && hasExplicitSeedMarker(raw)) 2 else 0
+        return wordQuality + countryQuality + seedQuality
     }
 
     private fun selectFallbackEntrants(entries: List<ParsedEntrantLine>): Pair<ParsedEntrantLine, ParsedEntrantLine>? {
