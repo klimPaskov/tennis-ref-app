@@ -19,6 +19,7 @@ Applying a violation returns:
 - updated counts
 - current penalty text
 - next-step penalty text
+- a short, concrete example shown in confirmation dialog (to help quick on-court decisions)
 
 ## Main files
 - `app/src/main/java/com/klim/tennisrefapp/domain/usecase/ApplyViolationUseCase.kt`

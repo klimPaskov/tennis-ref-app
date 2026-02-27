@@ -99,6 +99,7 @@ import kotlinx.coroutines.delay
 private data class ViolationTemplate(
     val name: String,
     val category: ViolationCategory,
+    val example: String,
 )
 
 private enum class ResolverSide {
@@ -117,17 +118,61 @@ private data class ScoreArgumentResolution(
 )
 
 private val commonViolations = listOf(
-    ViolationTemplate("Racquet or equipment abuse", ViolationCategory.CODE),
-    ViolationTemplate("Unsportsmanlike conduct", ViolationCategory.CODE),
-    ViolationTemplate("Coaching", ViolationCategory.CODE),
-    ViolationTemplate("Ball abuse", ViolationCategory.CODE),
-    ViolationTemplate("Audible obscenity", ViolationCategory.CODE),
-    ViolationTemplate("Visible obscenity", ViolationCategory.CODE),
-    ViolationTemplate("Verbal abuse", ViolationCategory.CODE),
-    ViolationTemplate("Leaving court without permission", ViolationCategory.CODE),
-    ViolationTemplate("Best efforts", ViolationCategory.CODE),
-    ViolationTemplate("Time violation (server)", ViolationCategory.TIME_SERVER),
-    ViolationTemplate("Time violation (receiver)", ViolationCategory.TIME_RECEIVER),
+    ViolationTemplate(
+        name = "Racquet or equipment abuse",
+        category = ViolationCategory.CODE,
+        example = "Player slams racquet into the court after losing a point.",
+    ),
+    ViolationTemplate(
+        name = "Unsportsmanlike conduct",
+        category = ViolationCategory.CODE,
+        example = "Player delays restart by arguing loudly after a ruling.",
+    ),
+    ViolationTemplate(
+        name = "Coaching",
+        category = ViolationCategory.CODE,
+        example = "Coach gives tactical hand signals during a live game.",
+    ),
+    ViolationTemplate(
+        name = "Ball abuse",
+        category = ViolationCategory.CODE,
+        example = "Player hits a ball out of court in anger between points.",
+    ),
+    ViolationTemplate(
+        name = "Audible obscenity",
+        category = ViolationCategory.CODE,
+        example = "Player shouts an obscene word loud enough for nearby courts to hear.",
+    ),
+    ViolationTemplate(
+        name = "Visible obscenity",
+        category = ViolationCategory.CODE,
+        example = "Player makes an obscene hand gesture after an unforced error.",
+    ),
+    ViolationTemplate(
+        name = "Verbal abuse",
+        category = ViolationCategory.CODE,
+        example = "Player insults an official, opponent, or ball kid directly.",
+    ),
+    ViolationTemplate(
+        name = "Leaving court without permission",
+        category = ViolationCategory.CODE,
+        example = "Player exits court area during play without referee approval.",
+    ),
+    ViolationTemplate(
+        name = "Best efforts",
+        category = ViolationCategory.CODE,
+        example = "Player intentionally stops competing and does not attempt to return balls.",
+    ),
+    ViolationTemplate(
+        name = "Time violation (server)",
+        category = ViolationCategory.TIME_SERVER,
+        example = "Server repeatedly exceeds the serve clock between points.",
+    ),
+    ViolationTemplate(
+        name = "Time violation (receiver)",
+        category = ViolationCategory.TIME_RECEIVER,
+        example = "Receiver is not ready and repeatedly delays the server.",
+    ),
 )
 
 private val inProgressTimers = listOf(
@@ -644,6 +689,10 @@ private fun ViolationDialog(
                         text = "This offence #$offenceNumber: $appliedPenalty",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Example: ${violation.example}",
+                        style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
                         text = "Next offence: $nextPenalty",
