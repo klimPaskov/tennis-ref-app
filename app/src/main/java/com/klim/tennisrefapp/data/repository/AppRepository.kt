@@ -1858,43 +1858,34 @@ class AppRepository @Inject constructor(
             .mapNotNull { line ->
                 parseRowNumber(line.text)?.let { line.centerY }
             }
-            .sorted()
-            .fold(mutableListOf<Float>()) { acc, y ->
-                if (acc.isEmpty() || abs(acc.last() - y) > 14f) acc += y
-                acc
-            }
+            .let { values -> clusterAnchorValues(values, tolerance = 14f) }
 
         val scheduleAnchors = lines
             .filter { line ->
                 line.top >= headerBottom &&
                     containsScheduleKeyword(line.text)
             }
-            .sortedBy { it.centerY }
-            .fold(mutableListOf<Float>()) { acc, line ->
-                if (acc.isEmpty() || abs(acc.last() - line.centerY) > 24f) {
-                    acc += line.centerY
-                } else {
-                    acc[acc.lastIndex] = (acc.last() + line.centerY) / 2f
-                }
-                acc
+            .map { it.centerY }
+            .let { values -> clusterAnchorValues(values, tolerance = 24f) }
+
+        val vsAnchors = lines
+            .filter { line ->
+                line.top >= headerBottom &&
+                    isVsToken(line.text)
             }
+            .map { it.centerY }
+            .let { values -> clusterAnchorValues(values, tolerance = 22f) }
 
         val anchors = if (
             rowMarkers.isNotEmpty() &&
-            (scheduleAnchors.isEmpty() || rowMarkers.size >= (scheduleAnchors.size - 1))
+            (
+                (scheduleAnchors.isEmpty() || rowMarkers.size >= (scheduleAnchors.size - 1)) &&
+                    (vsAnchors.isEmpty() || rowMarkers.size >= (vsAnchors.size - 1))
+                )
         ) {
             rowMarkers
         } else {
-            (rowMarkers + scheduleAnchors)
-                .sorted()
-                .fold(mutableListOf<Float>()) { acc, y ->
-                    if (acc.isEmpty() || abs(acc.last() - y) > 18f) {
-                        acc += y
-                    } else {
-                        acc[acc.lastIndex] = (acc.last() + y) / 2f
-                    }
-                    acc
-                }
+            clusterAnchorValues(rowMarkers + scheduleAnchors + vsAnchors, tolerance = 18f)
         }
 
         if (anchors.isEmpty()) {
@@ -1926,8 +1917,24 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private fun clusterAnchorValues(values: List<Float>, tolerance: Float): List<Float> {
+        if (values.isEmpty()) return emptyList()
+        return values
+            .sorted()
+            .fold(mutableListOf<Float>()) { acc, value ->
+                if (acc.isEmpty() || abs(acc.last() - value) > tolerance) {
+                    acc += value
+                } else {
+                    acc[acc.lastIndex] = (acc.last() + value) / 2f
+                }
+                acc
+            }
+    }
+
     private fun parseMatchPairFromCellLines(cellLines: List<OcrLine>): Pair<ParsedEntrant, ParsedEntrant>? {
         if (cellLines.isEmpty()) return null
+
+        parseStructuredPairFromCellLines(cellLines)?.let { return it }
 
         val concatenatedPair = cellLines
             .asSequence()
@@ -2003,6 +2010,195 @@ class AppRepository @Inject constructor(
             }
         }
         return null
+    }
+
+    private fun parseStructuredPairFromCellLines(cellLines: List<OcrLine>): Pair<ParsedEntrant, ParsedEntrant>? {
+        val allCandidates = extractStructuredEntrantCandidates(cellLines)
+        if (allCandidates.size < 2) return null
+        val candidates = allCandidates.filter { candidate ->
+            val words = candidate.entrant.name.split(' ').count { it.isNotBlank() }
+            words >= 2 || candidate.confidence >= 12
+        }
+        if (candidates.size < 2) return null
+
+        val vsIndex = cellLines.indexOfFirst { isVsToken(it.text) }
+        if (vsIndex != -1) {
+            val splitY = cellLines[vsIndex].centerY
+            val upper = candidates
+                .filter { it.centerY <= splitY + 8f }
+                .maxByOrNull { it.confidence }
+            val lower = candidates
+                .filter { candidate ->
+                    candidate.centerY >= splitY - 8f &&
+                        candidate.nameKey != upper?.nameKey
+                }
+                .maxByOrNull { it.confidence }
+            if (upper != null && lower != null &&
+                !upper.entrant.name.equals(lower.entrant.name, ignoreCase = true)
+            ) {
+                return sanitizeSeedConflict(
+                    upper.entrant,
+                    lower.entrant,
+                    upper.sourceText,
+                    lower.sourceText,
+                )
+            }
+        }
+
+        val sorted = candidates.sortedBy { it.centerY }
+        var bestPair: Pair<StructuredEntrantCandidate, StructuredEntrantCandidate>? = null
+        var bestScore = Int.MIN_VALUE
+        for (i in 0 until sorted.lastIndex) {
+            for (j in i + 1 until sorted.size) {
+                val upper = sorted[i]
+                val lower = sorted[j]
+                if (upper.nameKey == lower.nameKey) continue
+                if (upper.entrant.name.equals(lower.entrant.name, ignoreCase = true)) continue
+                val verticalGapScore = ((lower.centerY - upper.centerY).coerceAtLeast(0f) / 6f).toInt().coerceAtMost(16)
+                val pairScore = upper.confidence + lower.confidence + verticalGapScore
+                if (pairScore > bestScore) {
+                    bestScore = pairScore
+                    bestPair = upper to lower
+                }
+            }
+        }
+        val selected = bestPair ?: return null
+        return sanitizeSeedConflict(
+            selected.first.entrant,
+            selected.second.entrant,
+            selected.first.sourceText,
+            selected.second.sourceText,
+        )
+    }
+
+    private fun extractStructuredEntrantCandidates(cellLines: List<OcrLine>): List<StructuredEntrantCandidate> {
+        if (cellLines.isEmpty()) return emptyList()
+        val snippets = mutableListOf<Pair<String, Float>>()
+        cellLines.forEach { line ->
+            snippets += line.text to line.centerY
+        }
+        for (i in 0 until cellLines.lastIndex) {
+            val first = cellLines[i]
+            val second = cellLines[i + 1]
+            if (abs(first.centerY - second.centerY) <= 34f) {
+                snippets += "${first.text} ${second.text}" to ((first.centerY + second.centerY) / 2f)
+            }
+        }
+
+        val bestByKey = linkedMapOf<String, StructuredEntrantCandidate>()
+        snippets.forEach { (text, centerY) ->
+            parseStructuredEntrantsFromText(text).forEach { parsed ->
+                val key = parsed.name.lowercase()
+                val confidence = structuredEntrantConfidence(parsed, text)
+                val candidate = StructuredEntrantCandidate(
+                    entrant = parsed,
+                    centerY = centerY,
+                    confidence = confidence,
+                    sourceText = text,
+                    nameKey = key,
+                )
+                val existing = bestByKey[key]
+                if (existing == null || candidate.confidence > existing.confidence) {
+                    bestByKey[key] = candidate
+                }
+            }
+        }
+        return bestByKey.values.toList()
+    }
+
+    private fun parseStructuredEntrantsFromText(text: String): List<ParsedEntrant> {
+        val normalized = text.normalizeSpaces().trim()
+        if (normalized.isBlank()) return emptyList()
+        val entrantPattern = Regex("([A-Za-z][A-Za-z'\\-\\. ]{1,80}?)\\s*\\(\\s*([A-Za-z0-9|]{2,6})\\s*\\)\\s*(?:\\[\\s*([A-Za-z0-9|]{1,4})\\s*])?")
+        val matches = entrantPattern.findAll(normalized).toList()
+        if (matches.isEmpty()) return emptyList()
+
+        val parsed = mutableListOf<ParsedEntrant>()
+        matches.forEach { match ->
+            val rawName = match.groupValues.getOrNull(1).orEmpty().normalizeSpaces()
+            val rawCountry = match.groupValues.getOrNull(2).orEmpty()
+            val rawSeed = match.groupValues.getOrNull(3).orEmpty()
+            val country = normalizeCountryCodeToken(rawCountry, allowFuzzy = true)
+            val baseTokens = rawName
+                .split(' ')
+                .map(::normalizeNameToken)
+                .filter { token ->
+                    token.isNotBlank() &&
+                        token.any { it.isLetter() } &&
+                        !tokenMatchesCountry(token, country)
+                }
+            val seed = when {
+                rawSeed.isBlank() -> null
+                else -> decodeSeedToken(rawSeed, country) ?: rawSeed.toIntOrNull()?.takeIf { it in 1..32 }
+            }
+            structuredNameTokenCandidates(baseTokens).forEach { candidateTokens ->
+                val cleanedTokens = cleanupNameTokens(candidateTokens)
+                if (cleanedTokens.isEmpty()) return@forEach
+                val name = normalizePersonNameCase(cleanedTokens.joinToString(" "))
+                if (name.isBlank()) return@forEach
+                parsed += ParsedEntrant(name = name, countryCode = country, seed = seed)
+            }
+        }
+        return parsed
+            .distinctBy { entrant -> "${entrant.name.lowercase()}|${entrant.countryCode}|${entrant.seed}" }
+    }
+
+    private fun structuredEntrantConfidence(entrant: ParsedEntrant, sourceText: String): Int {
+        val words = entrant.name.split(' ').filter { it.isNotBlank() }
+        val tokenCountScore = when (words.size) {
+            1 -> -4
+            in 2..3 -> 8
+            4 -> 4
+            5 -> 1
+            else -> -2
+        }
+        val wordShapeScore = words.fold(0) { acc, word ->
+            acc + when {
+                word.length <= 1 -> -3
+                word.length in 2..16 -> 2
+                word.length in 17..24 -> 1
+                else -> -1
+            }
+        }
+        val countryScore = if (entrant.countryCode != null) 6 else 0
+        val seedScore = if (entrant.seed != null) 3 else 0
+        val markerScore = if (sourceText.contains('(') && sourceText.contains(')')) 2 else 0
+        return tokenCountScore + wordShapeScore + countryScore + seedScore + markerScore
+    }
+
+    private fun structuredNameTokenCandidates(baseTokens: List<String>): List<List<String>> {
+        val cleaned = cleanupNameTokens(baseTokens)
+        if (cleaned.isEmpty()) return emptyList()
+
+        val candidates = linkedSetOf<List<String>>()
+        candidates += cleaned
+
+        val splitSegments = Regex("(?i)\\b(?:and|&|/)\\b")
+            .split(cleaned.joinToString(" "))
+            .map { segment ->
+                cleanupNameTokens(
+                    segment
+                        .split(' ')
+                        .map { token -> token.trim() }
+                        .filter { token -> token.isNotBlank() },
+                )
+            }
+            .filter { segment -> segment.isNotEmpty() }
+        splitSegments.forEach { segment ->
+            candidates += segment
+        }
+
+        if (cleaned.size > 4) {
+            for (windowSize in 2..4) {
+                if (cleaned.size >= windowSize) {
+                    candidates += cleaned.takeLast(windowSize)
+                }
+            }
+        }
+
+        return candidates
+            .filter { tokens -> tokens.any { token -> token.length >= 2 } }
+            .distinct()
     }
 
     private fun extractConcatenatedPair(raw: String): Pair<ParsedEntrant, ParsedEntrant>? {
@@ -2155,10 +2351,15 @@ class AppRepository @Inject constructor(
             val bestByOverlap = columns.maxByOrNull { column -> columnOverlapWidth(line, column) }
             val overlapWidth = bestByOverlap?.let { columnOverlapWidth(line, it) } ?: 0f
             val lineWidth = (line.right - line.left).coerceAtLeast(1f)
+            val overlapRatio = overlapWidth / lineWidth
             val bestColumn = when {
                 !isEntrantLike -> bestByOverlap ?: nearestByCenter
-                bestByOverlap != null && overlapWidth / lineWidth >= 0.28f -> bestByOverlap
-                else -> nearestByCenter
+                bestByOverlap != null && overlapRatio >= 0.16f -> bestByOverlap
+                nearestByCenter != null &&
+                    line.centerX >= nearestByCenter.leftBoundary - 18f &&
+                    line.centerX <= nearestByCenter.rightBoundary + 18f -> nearestByCenter
+
+                else -> bestByOverlap ?: nearestByCenter
             } ?: return@forEach
 
             if (isEntrantLike && looksLikeCrossColumnEntrantLine(line, bestColumn)) {
@@ -2182,8 +2383,12 @@ class AppRepository @Inject constructor(
         val overlapRatio = columnOverlapWidth(line, column) / lineWidth.coerceAtLeast(1f)
         if (overlapRatio >= 0.72f) return false
         if (containsScheduleKeyword(line.text)) return false
+        val tokenCount = Regex("[A-Za-z']+").findAll(line.text).count()
         val markerCount = Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)").findAll(line.text).count()
-        return markerCount >= 2 && !INLINE_VS_REGEX.containsMatchIn(line.text)
+        if (INLINE_VS_REGEX.containsMatchIn(line.text)) return false
+        if (markerCount >= 2) return true
+        if (markerCount == 1 && tokenCount >= 6 && lineWidth >= columnWidth * 1.35f) return true
+        return markerCount == 0 && tokenCount >= 7 && lineWidth >= columnWidth * 1.5f
     }
 
     private fun parseCourtName(raw: String): String? {
@@ -2997,6 +3202,14 @@ class AppRepository @Inject constructor(
         val centerY: Float,
         val raw: String,
         val entrant: ParsedEntrant,
+    )
+
+    private data class StructuredEntrantCandidate(
+        val entrant: ParsedEntrant,
+        val centerY: Float,
+        val confidence: Int,
+        val sourceText: String,
+        val nameKey: String,
     )
 
     private data class CourtPlacement(
