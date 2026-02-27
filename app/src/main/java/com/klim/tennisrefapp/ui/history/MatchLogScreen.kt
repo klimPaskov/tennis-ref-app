@@ -83,6 +83,13 @@ private fun MatchLogScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(detail.matchLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    detail.winnerLabel?.takeIf { it.isNotBlank() }?.let { winner ->
+                        Text(
+                            text = "Winner: $winner",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                     detail.courtName?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     detail.scoreLabel?.let { Text("Score: $it", style = MaterialTheme.typography.bodyMedium) }
                     matchDurationLabel(detail.startedAtMillis, detail.endedAtMillis)?.let { duration ->
@@ -91,13 +98,15 @@ private fun MatchLogScreen(
                 }
             }
             items(detail.events, key = { it.id }) { event ->
+                val title = eventTitle(event.kind, event.message)
+                val details = eventDetails(event.kind, event.message, title)
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = eventTitle(event.kind, event.message),
+                            text = title,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -106,10 +115,8 @@ private fun MatchLogScreen(
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        eventDetails(event.kind, event.message)?.let { details ->
-                            if (details.isNotBlank()) {
-                                Text(details, style = MaterialTheme.typography.bodyMedium)
-                            }
+                        if (!details.isNullOrBlank()) {
+                            Text(details, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -142,16 +149,23 @@ private fun eventTitle(kind: MatchEventKind, message: String?): String {
     }
 }
 
-private fun eventDetails(kind: MatchEventKind, message: String?): String? {
+private fun eventDetails(kind: MatchEventKind, message: String?, title: String): String? {
     if (message.isNullOrBlank()) return null
     return when (kind) {
         MatchEventKind.MATCH_STARTED,
         MatchEventKind.MATCH_ENDED,
         -> null
 
-        MatchEventKind.TIMER -> formatTimerMessage(message)
+        MatchEventKind.TIMER -> {
+            val details = formatTimerMessage(message)
+            if (normalizeForComparison(details) == normalizeForComparison(title)) null else details
+        }
         MatchEventKind.VIOLATION -> formatViolationMessage(message)
     }
+}
+
+private fun normalizeForComparison(value: String): String {
+    return value.lowercase().replace(Regex("[^a-z0-9]"), "")
 }
 
 private fun formatTimerMessage(message: String): String {
