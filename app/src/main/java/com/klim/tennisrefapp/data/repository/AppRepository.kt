@@ -996,6 +996,9 @@ class AppRepository @Inject constructor(
             )
             val courtsById = courts.associateBy { it.id }
             val playerMatches = matches.filter { matchHasPlayer(it.id, player.id, context) }
+            val latestCompletedRaw = playerMatches
+                .filter { it.status == MatchStatus.COMPLETED }
+                .maxByOrNull { it.endedAt ?: Long.MIN_VALUE }
 
             val completed = playerMatches
                 .filter { it.status == MatchStatus.COMPLETED }
@@ -1013,7 +1016,7 @@ class AppRepository @Inject constructor(
                     )
                 }
 
-            val next = playerMatches
+            val nextRaw = playerMatches
                 .asSequence()
                 .filter { it.status == MatchStatus.SCHEDULED || it.status == MatchStatus.IN_PROGRESS }
                 .sortedWith(
@@ -1021,7 +1024,7 @@ class AppRepository @Inject constructor(
                         .thenBy { it.id },
                 )
                 .firstOrNull()
-                ?.let { match ->
+            val next = nextRaw?.let { match ->
                     PlayerMatchSnapshot(
                         matchId = match.id,
                         courtName = match.courtId?.let { courtsById[it]?.name ?: "Court $it" },
@@ -1041,7 +1044,11 @@ class AppRepository @Inject constructor(
                 currentRestMinutes = player.restMinutes ?: context.defaultRestMinutes,
                 completedMatches = completed,
                 nextMatch = next,
-                canRequestRest = canPlayerRequestRest(completed, next != null),
+                canRequestRest = canPlayerRequestRest(
+                    latestCompleted = latestCompletedRaw,
+                    nextMatch = nextRaw,
+                    restMinutes = player.restMinutes ?: context.defaultRestMinutes,
+                ),
             )
         }
     }
@@ -1562,6 +1569,16 @@ class AppRepository @Inject constructor(
                     scoreText = scoreText,
                 ),
             )
+            slotDao.getAll()
+                .asSequence()
+                .filter { slot ->
+                    slot.slotType == SlotType.WINNER_OF_MATCH &&
+                        slot.winnerOfMatchId == match.id &&
+                        slot.directTeamId != winnerTeamId
+                }
+                .forEach { dependentSlot ->
+                    slotDao.update(dependentSlot.copy(directTeamId = winnerTeamId))
+                }
             eventLogDao.insert(
                 EventLogEntity(
                     matchId = match.id,
@@ -1743,6 +1760,7 @@ class AppRepository @Inject constructor(
 
         val restPlayers = participantIds.mapNotNull { playerId ->
             val player = context.playersById[playerId] ?: return@mapNotNull null
+            val suggestedRestMinutes = player.restMinutes ?: context.defaultRestMinutes
             val upcoming = matches
                 .asSequence()
                 .filter { candidate ->
@@ -1756,12 +1774,20 @@ class AppRepository @Inject constructor(
                 )
                 .firstOrNull()
                 ?: return@mapNotNull null
+            if (!isRestRelevantForUpcoming(
+                    completedMatchEndedAtMillis = endedAt,
+                    upcomingMatch = upcoming,
+                    restMinutes = suggestedRestMinutes,
+                )
+            ) {
+                return@mapNotNull null
+            }
 
             RestPromptPlayer(
                 playerId = player.id,
                 playerName = player.displayName,
                 countryCode = player.countryCode,
-                suggestedRestMinutes = player.restMinutes ?: context.defaultRestMinutes,
+                suggestedRestMinutes = suggestedRestMinutes,
                 upcomingMatchLabel = formatMatchLabel(upcoming, context),
                 upcomingCourtName = upcoming.courtId?.let { courtsById[it]?.name ?: "Court $it" },
             )
@@ -1925,21 +1951,22 @@ class AppRepository @Inject constructor(
                         candidate.id to MatchDependency(candidate.id, candidate.winnerTeamId)
                     },
                 )
-                val players = resolution.resolvedTeamId?.let { context.teamPlayersByTeam[it].orEmpty() }
+                val resolvedTeamId = slot.directTeamId ?: resolution.resolvedTeamId
+                val players = resolvedTeamId?.let { context.teamPlayersByTeam[it].orEmpty() }
                     .orEmpty()
                     .map {
                     PlayerRef(playerId = it.id, name = it.displayName, countryCode = it.countryCode)
                 }
                 SideParticipant(
                     slotId = slot.id,
-                    label = if (resolution.resolvedTeamId != null) {
-                        labelForTeam(resolution.resolvedTeamId, context)
+                    label = if (resolvedTeamId != null) {
+                        labelForTeam(resolvedTeamId, context)
                     } else {
                         "TBD"
                     },
                     players = players,
-                    resolvedTeamId = resolution.resolvedTeamId,
-                    isResolved = resolution.isResolved,
+                    resolvedTeamId = resolvedTeamId,
+                    isResolved = resolvedTeamId != null,
                     dependencyMatchId = winnerOfMatch,
                     dependencyCourtId = sourceMatch?.courtId,
                     dependencyLabel = sourceMatch?.let { match ->
@@ -2042,14 +2069,33 @@ class AppRepository @Inject constructor(
         }
     }
 
-    private fun canPlayerRequestRest(completed: List<PlayerMatchSnapshot>, hasUpcomingMatch: Boolean): Boolean {
-        if (!hasUpcomingMatch) return false
-        return completed.any { snapshot ->
-            val started = snapshot.startedAtMillis ?: return@any false
-            val ended = snapshot.endedAtMillis ?: return@any false
-            val durationMinutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
-            durationMinutes >= REST_PROMPT_MIN_MATCH_MINUTES
-        }
+    private fun canPlayerRequestRest(
+        latestCompleted: MatchEntity?,
+        nextMatch: MatchEntity?,
+        restMinutes: Int,
+    ): Boolean {
+        val completed = latestCompleted ?: return false
+        val upcoming = nextMatch ?: return false
+        val started = completed.startedAt ?: return false
+        val ended = completed.endedAt ?: return false
+        val durationMinutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
+        if (durationMinutes < REST_PROMPT_MIN_MATCH_MINUTES) return false
+        return isRestRelevantForUpcoming(
+            completedMatchEndedAtMillis = ended,
+            upcomingMatch = upcoming,
+            restMinutes = restMinutes,
+        )
+    }
+
+    private fun isRestRelevantForUpcoming(
+        completedMatchEndedAtMillis: Long,
+        upcomingMatch: MatchEntity,
+        restMinutes: Int,
+    ): Boolean {
+        if (upcomingMatch.status == MatchStatus.IN_PROGRESS) return true
+        val baselineStart = upcomingMatch.manualNotBefore ?: return true
+        val gapMinutes = ((baselineStart - completedMatchEndedAtMillis).coerceAtLeast(0L) / 60_000L).toInt()
+        return gapMinutes <= restMinutes
     }
 
     private fun computeDrawDepth(

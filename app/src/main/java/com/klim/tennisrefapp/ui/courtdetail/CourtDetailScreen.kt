@@ -1424,11 +1424,18 @@ private fun ParticipantSideCard(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    val canOpenSource = (side?.label == "TBD" || side?.players.isNullOrEmpty()) &&
+                        side?.dependencyCourtId != null
                     Text(
                         text = side?.label ?: "TBD",
                         style = MaterialTheme.typography.titleMedium,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
+                        fontWeight = if (canOpenSource) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = canOpenSource) {
+                                onOpenDependencyCourt(side?.dependencyCourtId)
+                            },
                     )
                     side?.dependencyLabel
                         ?.takeIf { label -> label.isNotBlank() }
@@ -1439,11 +1446,6 @@ private fun ParticipantSideCard(
                                 textAlign = TextAlign.Center,
                             )
                         }
-                    if ((side?.label == "TBD" || side?.players.isNullOrEmpty()) && side?.dependencyCourtId != null) {
-                        OutlinedButton(onClick = { onOpenDependencyCourt(side.dependencyCourtId) }) {
-                            Text("Open Source Court")
-                        }
-                    }
                 }
             }
         }
