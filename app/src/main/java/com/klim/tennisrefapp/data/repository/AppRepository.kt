@@ -1538,7 +1538,10 @@ class AppRepository @Inject constructor(
         val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
         val mimeType = appContext.contentResolver.getType(uri)?.lowercase().orEmpty()
         if (isImageFile(uri, mimeType)) {
-            parseOrderOfPlayFromImage(uri)?.let { return it }
+            return parseOrderOfPlayFromImage(uri)
+        }
+        if (isPdfFile(uri, mimeType)) {
+            return parseOrderOfPlayFromPdfByOcr(uri)
         }
 
         val text = readOrderOfPlayText(uri, mimeType) ?: return null
@@ -1548,11 +1551,7 @@ class AppRepository @Inject constructor(
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .toList()
-        parseOrderOfPlayFromTextLines(lines)?.let { return it }
-        if (isPdfFile(uri, mimeType)) {
-            parseOrderOfPlayFromPdfByOcr(uri)?.let { return it }
-        }
-        return null
+        return parseOrderOfPlayFromTextLines(lines)
     }
 
     private fun parseOrderOfPlayFromTextLines(
@@ -1653,15 +1652,6 @@ class AppRepository @Inject constructor(
                                 try {
                                     val recognized = Tasks.await(recognizer.process(InputImage.fromBitmap(pageBitmap, 0)))
                                     parseOrderOfPlayFromRecognizedTable(recognized)?.let { candidates += it }
-                                    if (candidates.isEmpty()) {
-                                        val lines = recognized.text
-                                            .replace('\u000C', '\n')
-                                            .lineSequence()
-                                            .map { it.trim() }
-                                            .filter { it.isNotBlank() }
-                                            .toList()
-                                        parseOrderOfPlayFromTextLines(lines)?.let { candidates += it }
-                                    }
                                 } finally {
                                     if (!pageBitmap.isRecycled) {
                                         pageBitmap.recycle()
