@@ -42,6 +42,17 @@ object CountryFlags {
         }
         dynamic.putAll(
             mapOf(
+                // Common sports/tennis 3-letter aliases that differ from ISO-3166 alpha-3.
+                "GER" to "DE",
+                "LAT" to "LV",
+                "SUI" to "CH",
+                "NED" to "NL",
+                "RSA" to "ZA",
+                "TPE" to "TW",
+                "INA" to "ID",
+                "KSA" to "SA",
+                "TAN" to "TZ",
+                "PUR" to "PR",
                 "GBR" to "GB",
                 "XKX" to "XK",
             ),
