@@ -21,5 +21,6 @@ Thumbs.db
 /.artifacts/
 .agents/
 *.Zone.Identifier
+orderofplay.*
 AGENTS.md
 SPEC.md
