@@ -1630,7 +1630,12 @@ class AppRepository @Inject constructor(
             val rowPairs = mutableListOf<Pair<ImportedOrderMatch, ScheduleContext>>()
             columns.forEach columnLoop@ { column ->
                 val cellLines = linesByColumn[column.name].orEmpty().sortedBy { it.top }
-                val entrants = parseMatchPairFromCellLines(cellLines) ?: return@columnLoop
+                val entrants = parseMatchPairWithRecovery(
+                    cellLines = cellLines,
+                    row = row,
+                    column = column,
+                    allLines = ocrLines,
+                ) ?: return@columnLoop
                 val schedule = parseScheduleContextFromCell(cellLines)
                 rowPairs += ImportedOrderMatch(
                     courtName = column.name,
@@ -1672,6 +1677,31 @@ class AppRepository @Inject constructor(
             courts = columns.map { it.name },
             matches = matches,
         )
+    }
+
+    private fun parseMatchPairWithRecovery(
+        cellLines: List<OcrLine>,
+        row: RowBandLayout,
+        column: CourtColumnLayout,
+        allLines: List<OcrLine>,
+    ): Pair<ParsedEntrant, ParsedEntrant>? {
+        parseMatchPairFromCellLines(cellLines)?.let { return it }
+        val expandedLines = allLines
+            .asSequence()
+            .filter { line ->
+                line.centerY >= row.topBoundary - ROW_RECOVERY_MARGIN &&
+                    line.centerY < row.bottomBoundary + ROW_RECOVERY_MARGIN &&
+                    columnOverlapWidth(line, column) >= ((line.right - line.left).coerceAtLeast(1f) * 0.18f)
+            }
+            .sortedBy { it.top }
+            .toList()
+        if (expandedLines.isEmpty()) return null
+        parseMatchPairFromCellLines(expandedLines)?.let { return it }
+
+        val entrantFocused = expandedLines.filter { line ->
+            isPotentialEntrantLine(line.text) || isVsToken(line.text) || containsScheduleKeyword(line.text)
+        }
+        return parseMatchPairFromCellLines(entrantFocused)
     }
 
     private fun extractOcrLines(recognized: Text): List<OcrLine> {
@@ -1766,18 +1796,34 @@ class AppRepository @Inject constructor(
                 acc
             }
 
-        val anchors = if (rowMarkers.isNotEmpty()) {
+        val scheduleAnchors = lines
+            .filter { line ->
+                line.top >= headerBottom &&
+                    containsScheduleKeyword(line.text)
+            }
+            .sortedBy { it.centerY }
+            .fold(mutableListOf<Float>()) { acc, line ->
+                if (acc.isEmpty() || abs(acc.last() - line.centerY) > 24f) {
+                    acc += line.centerY
+                } else {
+                    acc[acc.lastIndex] = (acc.last() + line.centerY) / 2f
+                }
+                acc
+            }
+
+        val anchors = if (
+            rowMarkers.isNotEmpty() &&
+            (scheduleAnchors.isEmpty() || rowMarkers.size >= (scheduleAnchors.size - 1))
+        ) {
             rowMarkers
         } else {
-            lines
-                .filter { line ->
-                        line.top >= headerBottom &&
-                        containsScheduleKeyword(line.text)
-                }
-                .sortedBy { it.centerY }
-                .fold(mutableListOf<Float>()) { acc, line ->
-                    if (acc.isEmpty() || abs(acc.last() - line.centerY) > 20f) {
-                        acc += line.centerY
+            (rowMarkers + scheduleAnchors)
+                .sorted()
+                .fold(mutableListOf<Float>()) { acc, y ->
+                    if (acc.isEmpty() || abs(acc.last() - y) > 18f) {
+                        acc += y
+                    } else {
+                        acc[acc.lastIndex] = (acc.last() + y) / 2f
                     }
                     acc
                 }
@@ -2214,7 +2260,16 @@ class AppRepository @Inject constructor(
             .toList()
             .asReversed()
         return tokens.firstNotNullOfOrNull { token ->
-            if (token.any { it.isDigit() } || token.contains('[') || token.contains(']') || token.contains('|')) {
+            val seedLikeLetterToken = token.length in 2..4 &&
+                token.any { it in "IZSOBL" } &&
+                token.any { it.isLetter() }
+            if (
+                token.any { it.isDigit() } ||
+                token.contains('[') ||
+                token.contains(']') ||
+                token.contains('|') ||
+                seedLikeLetterToken
+            ) {
                 decodeSeedToken(token, countryCode)
             } else {
                 null
@@ -2878,6 +2933,7 @@ class AppRepository @Inject constructor(
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
+        const val ROW_RECOVERY_MARGIN = 14f
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
