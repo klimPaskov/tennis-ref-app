@@ -934,6 +934,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.associate { it.id to it.name },
             )
             val courtsById = courts.associateBy { it.id }
 
@@ -993,6 +994,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.associate { it.id to it.name },
             )
             val courtsById = courts.associateBy { it.id }
             val playerMatches = matches.filter { matchHasPlayer(it.id, player.id, context) }
@@ -1082,6 +1084,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.associate { it.id to it.name },
             )
             val courtsById = courts.associateBy { it.id }
             matches
@@ -1140,6 +1143,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.associate { it.id to it.name },
             )
             val courtName = match.courtId?.let { courtId ->
                 courts.firstOrNull { it.id == courtId }?.name ?: "Court $courtId"
@@ -1191,6 +1195,8 @@ class AppRepository @Inject constructor(
             val tournament = values[5] as TournamentEntity?
 
             val slotsByMatch = slots.groupBy { it.matchId }
+            val courtSortById = courts.associate { it.id to it.sortOrder }
+            val courtNameById = courts.associate { it.id to it.name }
             val context = BuildContext(
                 matches = matches,
                 slotsByMatch = slotsByMatch,
@@ -1199,9 +1205,8 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courtNameById,
             )
-            val courtSortById = courts.associate { it.id to it.sortOrder }
-            val courtNameById = courts.associate { it.id to it.name }
             val depthCache = mutableMapOf<Long, Int>()
 
             val nodes = matches.mapNotNull { match ->
@@ -1320,6 +1325,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.associate { it.id to it.name },
             )
             courts.map { court ->
                 val currentMatch = pickCurrentMatch(court.id, matches)
@@ -1744,6 +1750,7 @@ class AppRepository @Inject constructor(
                 entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
             },
             defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            courtNamesById = courtsById.mapValues { it.value.name },
         )
 
         val participantIds = mutableSetOf<Long>()
@@ -1970,7 +1977,9 @@ class AppRepository @Inject constructor(
                     dependencyMatchId = winnerOfMatch,
                     dependencyCourtId = sourceMatch?.courtId,
                     dependencyLabel = sourceMatch?.let { match ->
-                        val sourceCourt = match.courtId?.let { "Court $it" } ?: "Unassigned court"
+                        val sourceCourt = match.courtId
+                            ?.let { courtId -> context.courtNamesById[courtId] ?: "Court $courtId" }
+                            ?: "Unassigned court"
                         "Winner from $sourceCourt • ${formatMatchLabel(match, context)}"
                     },
                 )
@@ -2191,6 +2200,7 @@ class AppRepository @Inject constructor(
                     entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
                 },
                 defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                courtNamesById = courts.mapValues { it.value.name },
             )
 
             for (match in matches) {
@@ -3948,6 +3958,7 @@ class AppRepository @Inject constructor(
         val playersById: Map<Long, PlayerEntity>,
         val teamPlayersByTeam: Map<Long, List<PlayerEntity>>,
         val defaultRestMinutes: Int,
+        val courtNamesById: Map<Long, String> = emptyMap(),
     )
 
     private data class ParsedEntrant(
