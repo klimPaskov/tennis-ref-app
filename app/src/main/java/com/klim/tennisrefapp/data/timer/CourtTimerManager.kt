@@ -10,6 +10,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.klim.tennisrefapp.data.work.CourtTimerFinishedWorker
+import com.klim.tennisrefapp.data.work.CourtTimerWarningWorker
+import com.klim.tennisrefapp.data.work.CourtWarmupPendingReminderWorker
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.repository.EventLogRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -98,6 +100,7 @@ class CourtTimerManager @Inject constructor(
         scheduleFinishWorker(timer)
         scheduleFinishAlarm(timer)
         scheduleWarningAlarm(timer)
+        scheduleWarningWorker(timer)
         logTimerEvent(courtId, matchId, timerType, "START")
         launchTicker(timer)
     }
@@ -108,7 +111,10 @@ class CourtTimerManager @Inject constructor(
         cancelFinishWorker(courtId)
         cancelFinishAlarm(courtId)
         cancelWarningAlarm(courtId)
+        cancelWarningWorker(courtId)
+        cancelWarmupPendingReminder(courtId)
         CourtTimerAlerts.cancelWarning(appContext, courtId)
+        CourtTimerAlerts.cancelWarmupPending(appContext, courtId)
         CourtTimerPersistence.remove(appContext, courtId)
         state.value = state.value.toMutableMap().also { map -> map.remove(courtId) }
         if (current != null && current.isRunning && current.timerType != CourtTimerType.WARMUP) {
@@ -249,6 +255,36 @@ class CourtTimerManager @Inject constructor(
         workManager.cancelUniqueWork(CourtTimerFinishedWorker.workName(courtId))
     }
 
+    private fun scheduleWarningWorker(timer: PersistedCourtTimer) {
+        if (timer.timerType != CourtTimerType.WARMUP) return
+        val delay = (timer.endAtMillis - System.currentTimeMillis() - 60_000L).coerceAtLeast(0L)
+        val request = OneTimeWorkRequestBuilder<CourtTimerWarningWorker>()
+            .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+            .setInputData(
+                Data.Builder()
+                    .putLong(CourtTimerWarningWorker.KEY_COURT_ID, timer.courtId)
+                    .putLong(CourtTimerWarningWorker.KEY_MATCH_ID, timer.matchId)
+                    .putString(CourtTimerWarningWorker.KEY_COURT_NAME, timer.courtName)
+                    .putString(CourtTimerWarningWorker.KEY_TIMER_TYPE, timer.timerType.name)
+                    .putLong(CourtTimerWarningWorker.KEY_END_AT, timer.endAtMillis)
+                    .build(),
+            )
+            .build()
+        workManager.enqueueUniqueWork(
+            CourtTimerWarningWorker.workName(timer.courtId),
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
+    private fun cancelWarningWorker(courtId: Long) {
+        workManager.cancelUniqueWork(CourtTimerWarningWorker.workName(courtId))
+    }
+
+    private fun cancelWarmupPendingReminder(courtId: Long) {
+        workManager.cancelUniqueWork(CourtWarmupPendingReminderWorker.workName(courtId))
+    }
+
     private fun cancelFinishAlarm(courtId: Long) {
         val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pendingIntent = timerAlarmPendingIntent(
@@ -326,6 +362,7 @@ class CourtTimerManager @Inject constructor(
             } else {
                 scheduleFinishAlarm(timer)
                 scheduleWarningAlarm(timer)
+                scheduleWarningWorker(timer)
                 launchTicker(timer)
             }
         }

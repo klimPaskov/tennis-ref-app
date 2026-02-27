@@ -57,15 +57,28 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
                 timerType = timerType,
             )
         }
-        eventLogRepository.logEvent(
-            matchId = matchId,
-            courtId = courtId,
-            kind = MatchEventKind.TIMER,
-            offenderPlayerId = null,
-            message = "TIMER|${timerType.name}|DONE",
-        )
+
+        if (timerType != CourtTimerType.WARMUP) {
+            eventLogRepository.logEvent(
+                matchId = matchId,
+                courtId = courtId,
+                kind = MatchEventKind.TIMER,
+                offenderPlayerId = null,
+                message = "TIMER|${timerType.name}|DONE",
+            )
+        }
         if (timerType == CourtTimerType.WARMUP) {
-            matchRepository.autoStartMatchFromWarmup(matchId)
+            val startResult = matchRepository.autoStartMatchFromWarmup(matchId)
+            if (startResult != com.klim.tennisrefapp.domain.repository.StartMatchResult.Success) {
+                CourtWarmupPendingReminderWorker.scheduleNext(
+                    context = applicationContext,
+                    courtId = courtId,
+                    matchId = matchId,
+                    courtName = courtName,
+                )
+            } else {
+                CourtTimerAlerts.cancelWarmupPending(applicationContext, courtId)
+            }
         }
         return Result.success()
     }

@@ -21,6 +21,7 @@ internal const val COURT_TIMER_CHANNEL_ID = "court_timer_channel_v2"
 internal const val COURT_TIMER_CHANNEL_NAME = "Court Timer"
 private const val COURT_TIMER_NOTIFICATION_BASE_ID = 10000
 private const val COURT_TIMER_WARNING_NOTIFICATION_BASE_ID = 20000
+private const val COURT_WARMUP_PENDING_NOTIFICATION_BASE_ID = 30000
 
 internal object CourtTimerAlerts {
     fun ensureChannel(context: Context) {
@@ -77,6 +78,33 @@ internal object CourtTimerAlerts {
     fun cancelWarning(context: Context, courtId: Long) {
         NotificationManagerCompat.from(context)
             .cancel(COURT_TIMER_WARNING_NOTIFICATION_BASE_ID + courtId.toInt())
+    }
+
+    fun notifyWarmupPending(
+        context: Context,
+        courtId: Long,
+        courtName: String,
+    ) {
+        ensureChannel(context)
+        if (!canPostNotifications(context)) return
+        val openCourtPendingIntent = openCourtPendingIntent(context, courtId)
+        val notification = NotificationCompat.Builder(context, COURT_TIMER_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("$courtName warm-up finished")
+            .setContentText("Start the match when ready")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(openCourtPendingIntent)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context)
+            .notify(COURT_WARMUP_PENDING_NOTIFICATION_BASE_ID + courtId.toInt(), notification)
+    }
+
+    fun cancelWarmupPending(context: Context, courtId: Long) {
+        NotificationManagerCompat.from(context)
+            .cancel(COURT_WARMUP_PENDING_NOTIFICATION_BASE_ID + courtId.toInt())
     }
 
     private fun notify(
