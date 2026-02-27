@@ -324,13 +324,6 @@ class AppRepository @Inject constructor(
     override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
         return when (preloadId.lowercase()) {
             "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
-            "seed_demo" -> {
-                withContext(Dispatchers.IO) {
-                    database.clearAllTables()
-                }
-                seedIfEmpty()
-                true
-            }
             else -> false
         }
     }

@@ -23,7 +23,6 @@ data class PreloadedOrderOption(
 
 private val DEFAULT_PRELOADED_OPTIONS = listOf(
     PreloadedOrderOption(id = "example", label = "Example"),
-    PreloadedOrderOption(id = "seed_demo", label = "Seed Demo"),
 )
 
 @HiltViewModel
