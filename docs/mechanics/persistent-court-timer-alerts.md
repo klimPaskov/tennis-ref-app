@@ -18,7 +18,7 @@ Keep referee timers reliable when navigating away from a court or when the app i
 - `CourtTimerFinishedWorker` runs at timer expiry and:
   - posts a high-priority local notification,
   - vibrates device,
-  - logs `TIMER|<TYPE>|DONE` event,
+  - logs `TIMER|<TYPE>|DONE` event (including player metadata for player-scoped timers like medical timeout),
   - clears persisted timer entry.
 - For `WARMUP`, worker also attempts automatic match start using the selected initial server.
 

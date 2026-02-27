@@ -16,6 +16,7 @@
 - Detect court columns from `Court X` labels.
 - Detect match pairings from lines around `vs.` tokens.
 - Parse player names and optional nationality code from `Name(COUNTRY)` patterns.
+- Detect doubles teams automatically when entrant text contains separators (`/`, `&`, or `and`) and create two-player teams.
 - Assign parsed pairs across detected courts in order.
 - Imported matches are created as scheduled (no pre-completed results/scores).
 
