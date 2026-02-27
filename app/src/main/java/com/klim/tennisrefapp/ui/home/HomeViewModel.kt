@@ -51,6 +51,21 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun onReloadCurrentOrderOfPlay() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isReloading = true, message = null)
+            val reloaded = tournamentRepository.reloadOrderOfPlay()
+            _uiState.value = HomeUiState(
+                isReloading = false,
+                message = if (reloaded) {
+                    "Reloaded current order of play."
+                } else {
+                    "Could not reload current order of play."
+                },
+            )
+        }
+    }
+
     fun onLoadPreloadedOrderOfPlay(preloadId: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)

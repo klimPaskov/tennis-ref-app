@@ -307,25 +307,53 @@ class AppRepository @Inject constructor(
         }
 
         recomputeNotBeforeAndSchedule()
+        saveReloadSource(sourceType = RELOAD_SOURCE_SEED, sourceValue = null)
     }
 
-    override suspend fun reloadOrderOfPlay() {
-        withContext(Dispatchers.IO) {
-            database.clearAllTables()
+    override suspend fun reloadOrderOfPlay(): Boolean {
+        val source = loadReloadSource()
+        return when (source.type) {
+            RELOAD_SOURCE_FILE -> {
+                val uriString = source.value ?: return false
+                val imported = parseOrderOfPlayFromUri(uriString) ?: return false
+                val replaced = replaceTournamentWithImportedOrder(imported)
+                if (replaced) {
+                    saveReloadSource(sourceType = RELOAD_SOURCE_FILE, sourceValue = uriString)
+                }
+                replaced
+            }
+            RELOAD_SOURCE_PRELOADED -> {
+                val preloadId = source.value ?: DEFAULT_PRELOADED_ID
+                loadPreloadedOrderOfPlay(preloadId)
+            }
+            else -> {
+                withContext(Dispatchers.IO) {
+                    database.clearAllTables()
+                }
+                seedIfEmpty()
+                true
+            }
         }
-        seedIfEmpty()
     }
 
     override suspend fun reloadOrderOfPlayFromFile(uriString: String): Boolean {
         val imported = parseOrderOfPlayFromUri(uriString) ?: return false
-        return replaceTournamentWithImportedOrder(imported)
+        val replaced = replaceTournamentWithImportedOrder(imported)
+        if (replaced) {
+            saveReloadSource(sourceType = RELOAD_SOURCE_FILE, sourceValue = uriString)
+        }
+        return replaced
     }
 
     override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
-        return when (preloadId.lowercase()) {
+        val loaded = when (preloadId.lowercase()) {
             "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
             else -> false
         }
+        if (loaded) {
+            saveReloadSource(sourceType = RELOAD_SOURCE_PRELOADED, sourceValue = preloadId.lowercase())
+        }
+        return loaded
     }
 
     private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
@@ -444,6 +472,29 @@ class AppRepository @Inject constructor(
 
         recomputeNotBeforeAndSchedule()
         return true
+    }
+
+    private fun loadReloadSource(): ReloadSource {
+        val prefs = appContext.getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+        val type = prefs.getString(KEY_RELOAD_SOURCE_TYPE, RELOAD_SOURCE_SEED)
+            ?.takeIf { it.isNotBlank() }
+            ?: RELOAD_SOURCE_SEED
+        return ReloadSource(
+            type = type,
+            value = prefs.getString(KEY_RELOAD_SOURCE_VALUE, null),
+        )
+    }
+
+    private fun saveReloadSource(
+        sourceType: String,
+        sourceValue: String?,
+    ) {
+        appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_RELOAD_SOURCE_TYPE, sourceType)
+            .putString(KEY_RELOAD_SOURCE_VALUE, sourceValue)
+            .apply()
     }
 
     private fun verifiedPreloadedOrderOfPlay(): ImportedOrderDocument {
@@ -3378,13 +3429,25 @@ class AppRepository @Inject constructor(
         val matches: List<ImportedOrderMatch>,
     )
 
+    private data class ReloadSource(
+        val type: String,
+        val value: String?,
+    )
+
     private companion object {
+        const val DEFAULT_PRELOADED_ID = "example"
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
         const val ROW_RECOVERY_MARGIN = 20f
         const val PDF_OCR_MAX_PAGES = 2
         const val PDF_OCR_RENDER_SCALE = 2.3f
         const val PDF_OCR_MAX_DIMENSION = 3200
+        const val RELOAD_PREFS_NAME = "order_of_play_reload_source"
+        const val KEY_RELOAD_SOURCE_TYPE = "type"
+        const val KEY_RELOAD_SOURCE_VALUE = "value"
+        const val RELOAD_SOURCE_SEED = "seed"
+        const val RELOAD_SOURCE_FILE = "file"
+        const val RELOAD_SOURCE_PRELOADED = "preloaded"
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
