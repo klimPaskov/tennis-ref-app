@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.room.withTransaction
+import com.klim.tennisrefapp.common.CountryFlags
 import com.klim.tennisrefapp.data.local.AppDatabase
 import com.klim.tennisrefapp.data.local.dao.CourtDao
 import com.klim.tennisrefapp.data.local.dao.EventLogDao
@@ -1321,6 +1322,7 @@ class AppRepository @Inject constructor(
                         courtName = court.name,
                         status = CourtStatus.EMPTY,
                         currentMatchLabel = "No match",
+                        scheduleLabel = null,
                         computedNotBeforeMillis = null,
                         matchId = null,
                         startedAtMillis = null,
@@ -1331,6 +1333,7 @@ class AppRepository @Inject constructor(
                         courtName = court.name,
                         status = currentMatch.status.toCourtStatus(),
                         currentMatchLabel = formatMatchLabel(currentMatch, context),
+                        scheduleLabel = extractScheduleLabel(currentMatch.roundName),
                         computedNotBeforeMillis = computeNotBefore(currentMatch, context),
                         matchId = currentMatch.id,
                         startedAtMillis = currentMatch.startedAt,
@@ -1379,6 +1382,7 @@ class AppRepository @Inject constructor(
                     matchId = null,
                     leftSide = null,
                     rightSide = null,
+                    scheduleLabel = null,
                     computedNotBeforeMillis = null,
                     startedAtMillis = null,
                     endedAtMillis = null,
@@ -1401,6 +1405,7 @@ class AppRepository @Inject constructor(
                     matchId = currentMatch.id,
                     leftSide = left,
                     rightSide = right,
+                    scheduleLabel = extractScheduleLabel(currentMatch.roundName),
                     computedNotBeforeMillis = computeNotBefore(currentMatch, context),
                     startedAtMillis = currentMatch.startedAt,
                     endedAtMillis = currentMatch.endedAt,
@@ -1865,6 +1870,29 @@ class AppRepository @Inject constructor(
         return "$left vs $right"
     }
 
+    private fun extractScheduleLabel(roundName: String?): String? {
+        val text = roundName?.trim().orEmpty()
+        if (text.isBlank()) return null
+        return when {
+            text.contains("Followed By", ignoreCase = true) -> "Followed By"
+            text.contains("Not Before", ignoreCase = true) -> {
+                val value = Regex("(?i)not\\s*before\\s*(\\d{1,2}:\\d{2})")
+                    .find(text)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                if (value != null) "Not before $value" else "Not before"
+            }
+            text.contains("Starting at", ignoreCase = true) -> {
+                val value = Regex("(?i)starting\\s*at\\s*(\\d{1,2}:\\d{2})")
+                    .find(text)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                if (value != null) "Starting at $value" else "Starting at"
+            }
+            else -> null
+        }
+    }
+
     private fun sideForMatch(
         matchId: Long,
         position: SlotPosition,
@@ -2089,16 +2117,7 @@ class AppRepository @Inject constructor(
     }
 
     private fun countryCodeToFlagEmoji(countryCode: String?): String? {
-        val normalized = countryCode?.trim()?.uppercase()?.ifBlank { null } ?: return null
-        val iso2 = if (normalized.length == 2) {
-            normalized
-        } else {
-            ISO3_TO_ISO2[normalized]
-        } ?: return null
-        if (iso2.length != 2 || !iso2.all { it in 'A'..'Z' }) return null
-        val first = Character.codePointAt(iso2, 0) - 0x41 + 0x1F1E6
-        val second = Character.codePointAt(iso2, 1) - 0x41 + 0x1F1E6
-        return String(Character.toChars(first)) + String(Character.toChars(second))
+        return CountryFlags.toFlagEmoji(countryCode)
     }
 
     private suspend fun recomputeNotBeforeAndSchedule() {
@@ -4002,30 +4021,8 @@ class AppRepository @Inject constructor(
         const val RELOAD_SOURCE_FILE = "file"
         const val RELOAD_SOURCE_PRELOADED = "preloaded"
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
-        val ISO3_TO_ISO2 = mapOf(
-            "BEL" to "BE",
-            "CHN" to "CN",
-            "CZE" to "CZ",
-            "DEN" to "DK",
-            "EST" to "EE",
-            "FIN" to "FI",
-            "GBR" to "GB",
-            "GER" to "DE",
-            "ISR" to "IL",
-            "ITA" to "IT",
-            "JPN" to "JP",
-            "LAT" to "LV",
-            "LIE" to "LI",
-            "LTU" to "LT",
-            "POL" to "PL",
-            "ROU" to "RO",
-            "SLO" to "SI",
-            "SUI" to "CH",
-            "SWE" to "SE",
-            "USA" to "US",
-            "UKR" to "UA",
-        )
-        val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
+        val ISO3_TO_ISO2 = CountryFlags.iso3ToIso2Map
+        val ISO2_CODES = CountryFlags.iso2Codes
         val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr", "la")
     }
 }

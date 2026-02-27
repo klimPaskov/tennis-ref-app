@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.klim.tennisrefapp.common.CountryFlags
 import kotlinx.coroutines.delay
 
 @Composable
@@ -172,38 +173,5 @@ private fun formatTime(timestamp: Long): String {
 }
 
 private fun countryCodeToFlagEmoji(countryCode: String?): String? {
-    val normalized = countryCode?.trim()?.uppercase()?.ifBlank { null } ?: return null
-    val iso2 = if (normalized.length == 2) {
-        normalized
-    } else {
-        ISO3_TO_ISO2[normalized]
-    } ?: return null
-    if (iso2.length != 2 || !iso2.all { it in 'A'..'Z' }) return null
-    val first = Character.codePointAt(iso2, 0) - 0x41 + 0x1F1E6
-    val second = Character.codePointAt(iso2, 1) - 0x41 + 0x1F1E6
-    return String(Character.toChars(first)) + String(Character.toChars(second))
+    return CountryFlags.toFlagEmoji(countryCode)
 }
-
-private val ISO3_TO_ISO2 = mapOf(
-    "BEL" to "BE",
-    "CHN" to "CN",
-    "CZE" to "CZ",
-    "DEN" to "DK",
-    "EST" to "EE",
-    "FIN" to "FI",
-    "GBR" to "GB",
-    "GER" to "DE",
-    "ISR" to "IL",
-    "ITA" to "IT",
-    "JPN" to "JP",
-    "LAT" to "LV",
-    "LIE" to "LI",
-    "LTU" to "LT",
-    "POL" to "PL",
-    "ROU" to "RO",
-    "SLO" to "SI",
-    "SUI" to "CH",
-    "SWE" to "SE",
-    "USA" to "US",
-    "UKR" to "UA",
-)

@@ -46,6 +46,7 @@ class CourtsViewModel @Inject constructor(
         }.sortedWith(
             compareBy<CourtListItemUi>(
                 { timerSortRank(it.activeTimerState) },
+                { followedBySortRank(it.court) },
                 { statusSortRank(it.court.status) },
                 { it.court.computedNotBeforeMillis ?: Long.MAX_VALUE },
                 { it.court.courtName },
@@ -99,5 +100,11 @@ class CourtsViewModel @Inject constructor(
         if (timerState == null) return 2
         if (timerState.isRunning) return 0
         return if (timerState.timerType == CourtTimerType.WARMUP) 1 else 2
+    }
+
+    private fun followedBySortRank(court: CourtCard): Int {
+        val isFollowedBy = court.status == CourtStatus.SCHEDULED &&
+            court.scheduleLabel?.contains("Followed By", ignoreCase = true) == true
+        return if (isFollowedBy) 0 else 1
     }
 }

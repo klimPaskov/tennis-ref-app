@@ -26,7 +26,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
-import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
@@ -83,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.klim.tennisrefapp.common.CountryFlags
 import com.klim.tennisrefapp.data.timer.CourtTimerState
 import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtDetail
@@ -232,7 +232,6 @@ fun CourtDetailRoute(
         onSaveLiveScoreSnapshot = viewModel::onSaveLiveScoreSnapshot,
         onDismissRestPrompt = viewModel::onDismissRestPrompt,
         onApplyRestChoices = viewModel::onApplyRestChoices,
-        onUndoViolation = viewModel::onUndoLastViolation,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -253,7 +252,6 @@ private fun CourtDetailScreen(
     onSaveLiveScoreSnapshot: (String) -> Unit,
     onDismissRestPrompt: () -> Unit,
     onApplyRestChoices: (Map<Long, Int>) -> Unit,
-    onUndoViolation: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
@@ -327,7 +325,6 @@ private fun CourtDetailScreen(
                         onOpenViolations = { showViolationDialog = true },
                         onOpenArgumentSolver = { showArgumentDialog = true },
                         onOpenFinalScore = { showScoreDialog = true },
-                        onUndoViolation = onUndoViolation,
                         medicalTimeoutEnabled = matchPlayers.any { player ->
                             !hasMedicalTimeoutStarted(uiState.matchEvents, player.playerId)
                         },
@@ -400,6 +397,8 @@ private fun CourtDetailScreen(
 
     if (showLiveScoreDialog) {
         LiveScoreSnapshotDialog(
+            initialScore = latestLiveScoreSnapshotValue(uiState.matchEvents),
+            isDoublesMatch = detail?.let(::isDoublesMatch) == true,
             onDismiss = { showLiveScoreDialog = false },
             onSave = { score ->
                 onSaveLiveScoreSnapshot(score)
@@ -439,8 +438,20 @@ private fun MatchHeader(detail: CourtDetail) {
         }
 
         if (detail.status == CourtStatus.SCHEDULED) {
-            detail.computedNotBeforeMillis?.let { notBefore ->
-                Text("Not before ${formatTime(notBefore)}", style = MaterialTheme.typography.bodyMedium)
+            when {
+                detail.scheduleLabel?.contains("Followed By", ignoreCase = true) == true -> {
+                    Text(
+                        "Followed By",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                !detail.scheduleLabel.isNullOrBlank() -> {
+                    Text(detail.scheduleLabel, style = MaterialTheme.typography.bodyMedium)
+                }
+                detail.computedNotBeforeMillis != null -> {
+                    Text("Not before ${formatTime(detail.computedNotBeforeMillis)}", style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
 
@@ -547,7 +558,6 @@ private fun InProgressActions(
     onOpenViolations: () -> Unit,
     onOpenArgumentSolver: () -> Unit,
     onOpenFinalScore: () -> Unit,
-    onUndoViolation: () -> Unit,
     medicalTimeoutEnabled: Boolean,
 ) {
     Row(
@@ -585,9 +595,6 @@ private fun InProgressActions(
         }
         FilledTonalIconButton(onClick = onOpenArgumentSolver, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Outlined.HelpOutline, contentDescription = "Solve argument")
-        }
-        FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
-            Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
         }
     }
 
@@ -696,31 +703,110 @@ private fun MedicalTimeoutDialog(
 
 @Composable
 private fun LiveScoreSnapshotDialog(
+    initialScore: String?,
+    isDoublesMatch: Boolean,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
 ) {
-    var score by remember { mutableStateOf("") }
+    val parsedSets = remember(initialScore) { parseScoreSetInputs(initialScore) }
+    var thirdSetMatchTieBreakSetting by remember(initialScore) { mutableStateOf(false) }
+    var set1Left by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(0)?.left.orEmpty()) }
+    var set1Right by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(0)?.right.orEmpty()) }
+    var set1TieBreak by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(0)?.tieBreakLoser.orEmpty()) }
+    var set2Left by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(1)?.left.orEmpty()) }
+    var set2Right by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(1)?.right.orEmpty()) }
+    var set2TieBreak by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(1)?.tieBreakLoser.orEmpty()) }
+    var set3Left by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(2)?.left.orEmpty()) }
+    var set3Right by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(2)?.right.orEmpty()) }
+    var set3TieBreak by remember(initialScore) { mutableStateOf(parsedSets.getOrNull(2)?.tieBreakLoser.orEmpty()) }
+    val showThirdSet = needsThirdSet(set1Left, set1Right, set2Left, set2Right) ||
+        set3Left.isNotBlank() || set3Right.isNotBlank() || set3TieBreak.isNotBlank()
+    val isThirdSetMatchTieBreakToTen = if (isDoublesMatch) true else thirdSetMatchTieBreakSetting
+    val scoreText = buildScoreFromSetFields(
+        listOf(
+            SetScoreInput(set1Left, set1Right, set1TieBreak),
+            SetScoreInput(set2Left, set2Right, set2TieBreak),
+            SetScoreInput(set3Left, set3Right, set3TieBreak),
+        ).take(if (showThirdSet) 3 else 2),
+    )
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Save Live Score") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Enter current score (for example 6:4 2:1).",
-                    style = MaterialTheme.typography.bodySmall,
+                ScoreSetRow(
+                    label = "Set 1",
+                    left = set1Left,
+                    right = set1Right,
+                    tieBreakLoser = set1TieBreak,
+                    onLeftChange = { set1Left = sanitizeScoreCell(it, maxDigits = 1) },
+                    onRightChange = { set1Right = sanitizeScoreCell(it, maxDigits = 1) },
+                    onTieBreakLoserChange = { set1TieBreak = sanitizeTieBreakCell(it) },
+                    showTieBreakFields = isTieBreakSet(set1Left, set1Right),
+                    autoAdvanceAfterSingleDigit = true,
+                    isLastVisibleRow = false,
                 )
-                TextField(
-                    value = score,
-                    onValueChange = { score = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                ScoreSetRow(
+                    label = "Set 2",
+                    left = set2Left,
+                    right = set2Right,
+                    tieBreakLoser = set2TieBreak,
+                    onLeftChange = { set2Left = sanitizeScoreCell(it, maxDigits = 1) },
+                    onRightChange = { set2Right = sanitizeScoreCell(it, maxDigits = 1) },
+                    onTieBreakLoserChange = { set2TieBreak = sanitizeTieBreakCell(it) },
+                    showTieBreakFields = isTieBreakSet(set2Left, set2Right),
+                    autoAdvanceAfterSingleDigit = true,
+                    isLastVisibleRow = !showThirdSet,
                 )
+                if (showThirdSet) {
+                    if (!isDoublesMatch) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            FilterChip(
+                                selected = isThirdSetMatchTieBreakToTen,
+                                onClick = { thirdSetMatchTieBreakSetting = !thirdSetMatchTieBreakSetting },
+                                label = { Text("Set 3 MTB to 10") },
+                            )
+                        }
+                    }
+                    ScoreSetRow(
+                        label = "Set 3",
+                        left = set3Left,
+                        right = set3Right,
+                        tieBreakLoser = set3TieBreak,
+                        onLeftChange = {
+                            set3Left = sanitizeScoreCell(
+                                it,
+                                maxDigits = if (isThirdSetMatchTieBreakToTen) 2 else 1,
+                            )
+                        },
+                        onRightChange = {
+                            set3Right = sanitizeScoreCell(
+                                it,
+                                maxDigits = if (isThirdSetMatchTieBreakToTen) 2 else 1,
+                            )
+                        },
+                        onTieBreakLoserChange = { set3TieBreak = sanitizeTieBreakCell(it) },
+                        showTieBreakFields = !isThirdSetMatchTieBreakToTen && isTieBreakSet(set3Left, set3Right),
+                        autoAdvanceAfterSingleDigit = !isThirdSetMatchTieBreakToTen,
+                        isLastVisibleRow = true,
+                    )
+                }
+                if (scoreText.isNotBlank()) {
+                    Text(
+                        text = "Current: $scoreText",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(score) },
-                enabled = score.trim().isNotBlank(),
+                onClick = { onSave(scoreText) },
+                enabled = scoreText.trim().isNotBlank(),
             ) {
                 Text("Save")
             }
@@ -1805,15 +1891,40 @@ private fun hasMedicalTimeoutStarted(
     return usedMedicalTimeoutPlayerIds(events).contains(playerId)
 }
 
-private fun latestLiveScoreSnapshotLabel(
-    events: List<MatchEvent>,
-): String? {
+private fun parseScoreSetInputs(scoreText: String?): List<SetScoreInput> {
+    val tokens = scoreText
+        ?.trim()
+        ?.split(Regex("\\s+"))
+        .orEmpty()
+        .filter { token -> token.isNotBlank() }
+    return tokens.mapNotNull { token ->
+        val match = Regex("^(\\d{1,2})[:\\-](\\d{1,2})(?:\\((\\d{1,2})\\))?$").matchEntire(token)
+            ?: return@mapNotNull null
+        SetScoreInput(
+            left = match.groupValues[1],
+            right = match.groupValues[2],
+            tieBreakLoser = match.groupValues.getOrNull(3).orEmpty().take(1),
+        )
+    }.take(3)
+}
+
+private fun latestLiveScoreSnapshotValue(events: List<MatchEvent>): String? {
     val latest = events.lastOrNull { event ->
         event.kind == MatchEventKind.TIMER &&
             event.message?.startsWith("SCORE_SNAPSHOT|") == true
     } ?: return null
     val score = latest.message?.substringAfter("SCORE_SNAPSHOT|")?.trim().orEmpty()
-    if (score.isBlank()) return null
+    return score.ifBlank { null }
+}
+
+private fun latestLiveScoreSnapshotLabel(
+    events: List<MatchEvent>,
+): String? {
+    val score = latestLiveScoreSnapshotValue(events) ?: return null
+    val latest = events.lastOrNull { event ->
+        event.kind == MatchEventKind.TIMER &&
+            event.message?.startsWith("SCORE_SNAPSHOT|") == true
+    } ?: return score
     return "$score (${formatTime(latest.timestamp)})"
 }
 
@@ -1879,42 +1990,8 @@ private fun splitNameIntoTwoLines(name: String): Pair<String, String?> {
 }
 
 private fun countryCodeToFlagEmoji(countryCode: String?): String? {
-    val normalized = countryCode?.trim()?.uppercase()?.ifBlank { null } ?: return null
-    val iso2 = if (normalized.length == 2) {
-        normalized
-    } else {
-        ISO3_TO_ISO2[normalized]
-    } ?: return null
-
-    if (iso2.length != 2 || !iso2.all { it in 'A'..'Z' }) return null
-    val first = Character.codePointAt(iso2, 0) - 0x41 + 0x1F1E6
-    val second = Character.codePointAt(iso2, 1) - 0x41 + 0x1F1E6
-    return String(Character.toChars(first)) + String(Character.toChars(second))
+    return CountryFlags.toFlagEmoji(countryCode)
 }
-
-private val ISO3_TO_ISO2 = mapOf(
-    "BEL" to "BE",
-    "CHN" to "CN",
-    "CZE" to "CZ",
-    "DEN" to "DK",
-    "EST" to "EE",
-    "FIN" to "FI",
-    "GBR" to "GB",
-    "GER" to "DE",
-    "ISR" to "IL",
-    "ITA" to "IT",
-    "JPN" to "JP",
-    "LAT" to "LV",
-    "LIE" to "LI",
-    "LTU" to "LT",
-    "POL" to "PL",
-    "ROU" to "RO",
-    "SLO" to "SI",
-    "SUI" to "CH",
-    "SWE" to "SE",
-    "USA" to "US",
-    "UKR" to "UA",
-)
 
 private fun statusLabel(status: CourtStatus): String {
     return when (status) {
@@ -1989,6 +2066,7 @@ private fun CourtDetailScheduledPreview() {
                         resolvedTeamId = 2,
                         isResolved = true,
                     ),
+                    scheduleLabel = "Followed By",
                     computedNotBeforeMillis = 1_700_000_000_000,
                     startedAtMillis = null,
                     endedAtMillis = null,
@@ -2021,7 +2099,6 @@ private fun CourtDetailScheduledPreview() {
             onSaveLiveScoreSnapshot = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
-            onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
     }
@@ -2052,6 +2129,7 @@ private fun CourtDetailCompletedPreview() {
                         resolvedTeamId = 11,
                         isResolved = true,
                     ),
+                    scheduleLabel = null,
                     computedNotBeforeMillis = null,
                     startedAtMillis = 1_700_000_000_000,
                     endedAtMillis = 1_700_002_100_000,
@@ -2075,7 +2153,6 @@ private fun CourtDetailCompletedPreview() {
             onSaveLiveScoreSnapshot = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
-            onUndoViolation = {},
             snackbarHostState = SnackbarHostState(),
         )
     }

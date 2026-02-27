@@ -157,11 +157,26 @@ private fun CourtCardItem(
                         )
                     }
                 } else if (court.status == CourtStatus.SCHEDULED) {
-                    court.computedNotBeforeMillis?.let { notBefore ->
-                        Text(
-                            text = "Not before ${formatTime(notBefore)}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                    when {
+                        court.scheduleLabel?.contains("Followed By", ignoreCase = true) == true -> {
+                            Text(
+                                text = "Followed By",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        !court.scheduleLabel.isNullOrBlank() -> {
+                            Text(
+                                text = court.scheduleLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        court.computedNotBeforeMillis != null -> {
+                            Text(
+                                text = "Not before ${formatTime(court.computedNotBeforeMillis)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
                     }
                 }
             }
@@ -236,6 +251,7 @@ private fun CourtCardItemPreview() {
                     courtName = "Court 2",
                     status = CourtStatus.SCHEDULED,
                     currentMatchLabel = "🇨🇳 Yiyuan Su vs 🇬🇧 Vincent Fletcher",
+                    scheduleLabel = "Followed By",
                     computedNotBeforeMillis = 1_700_000_000_000,
                     matchId = 42,
                     startedAtMillis = null,
