@@ -13,6 +13,17 @@ import kotlinx.coroutines.launch
 data class HomeUiState(
     val isReloading: Boolean = false,
     val message: String? = null,
+    val preloadedOptions: List<PreloadedOrderOption> = DEFAULT_PRELOADED_OPTIONS,
+)
+
+data class PreloadedOrderOption(
+    val id: String,
+    val label: String,
+)
+
+private val DEFAULT_PRELOADED_OPTIONS = listOf(
+    PreloadedOrderOption(id = "example", label = "Example"),
+    PreloadedOrderOption(id = "seed_demo", label = "Seed Demo"),
 )
 
 @HiltViewModel
@@ -41,10 +52,10 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun onLoadPreloadedOrderOfPlay() {
+    fun onLoadPreloadedOrderOfPlay(preloadId: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
-            val loaded = tournamentRepository.loadPreloadedOrderOfPlay()
+            val loaded = tournamentRepository.loadPreloadedOrderOfPlay(preloadId)
             _uiState.value = HomeUiState(
                 isReloading = false,
                 message = if (loaded) {

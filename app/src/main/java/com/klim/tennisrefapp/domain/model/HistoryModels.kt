@@ -15,6 +15,7 @@ data class MatchHistoryDetail(
     val matchId: Long,
     val courtName: String?,
     val matchLabel: String,
+    val winnerLabel: String?,
     val scoreLabel: String?,
     val startedAtMillis: Long?,
     val endedAtMillis: Long?,

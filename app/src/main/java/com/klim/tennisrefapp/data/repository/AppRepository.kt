@@ -321,8 +321,18 @@ class AppRepository @Inject constructor(
         return replaceTournamentWithImportedOrder(imported)
     }
 
-    override suspend fun loadPreloadedOrderOfPlay(): Boolean {
-        return replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
+    override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
+        return when (preloadId.lowercase()) {
+            "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
+            "seed_demo" -> {
+                withContext(Dispatchers.IO) {
+                    database.clearAllTables()
+                }
+                seedIfEmpty()
+                true
+            }
+            else -> false
+        }
     }
 
     private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
@@ -461,8 +471,9 @@ class AppRepository @Inject constructor(
             order: Int,
             left: ParsedEntrant,
             right: ParsedEntrant,
+            scheduleOverride: Pair<String, Long?>? = null,
         ): ImportedOrderMatch {
-            val (label, manual) = schedule(order)
+            val (label, manual) = scheduleOverride ?: schedule(order)
             return ImportedOrderMatch(
                 courtName = court,
                 order = order,
@@ -475,7 +486,13 @@ class AppRepository @Inject constructor(
 
         val matches = listOf(
             match("Court 2", 1, entrant("Yiyuan Su", "CHN"), entrant("Vincent Fletcher", "GBR", 5)),
-            match("Court 2", 2, entrant("Hanna Vanni", "FIN", 7), entrant("Vera Morozova", "EST")),
+            match(
+                "Court 2",
+                2,
+                entrant("Hanna Vanni", "FIN", 7),
+                entrant("Vera Morozova", "EST"),
+                scheduleOverride = "Not Before 09:00" to start0900,
+            ),
             match("Court 2", 3, entrant("Elizabete Marta Hamitova", "LAT"), entrant("Margarita Novik", "EST")),
             match("Court 2", 4, entrant("Filip Hesser", "SWE"), entrant("Andreas Kuum", "EST")),
             match("Court 3", 1, entrant("Sonia Sirenius", "FIN"), entrant("Vladislava Lescinska", "LAT")),
@@ -769,6 +786,9 @@ class AppRepository @Inject constructor(
                 matchId = match.id,
                 courtName = courtName,
                 matchLabel = formatMatchLabel(match, context),
+                winnerLabel = match.winnerTeamId?.let { winnerTeamId ->
+                    labelForTeam(winnerTeamId, context)
+                },
                 scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
                 startedAtMillis = match.startedAt,
                 endedAtMillis = match.endedAt,

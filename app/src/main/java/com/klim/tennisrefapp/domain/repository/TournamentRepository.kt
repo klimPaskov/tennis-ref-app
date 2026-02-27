@@ -4,5 +4,5 @@ interface TournamentRepository {
     suspend fun seedIfEmpty()
     suspend fun reloadOrderOfPlay()
     suspend fun reloadOrderOfPlayFromFile(uriString: String): Boolean
-    suspend fun loadPreloadedOrderOfPlay(): Boolean
+    suspend fun loadPreloadedOrderOfPlay(preloadId: String = "example"): Boolean
 }
