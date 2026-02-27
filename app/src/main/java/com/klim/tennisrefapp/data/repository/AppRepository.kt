@@ -1584,10 +1584,12 @@ class AppRepository @Inject constructor(
     }
 
     private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? {
-        return recognizeImageTextVariants(uri)
+        val bestVariant = recognizeImageTextVariants(uri)
             .maxByOrNull { it.text.text.length }
             ?.text
             ?.text
+        if (!bestVariant.isNullOrBlank()) return bestVariant
+        return recognizeImageTextFromSourceUri(uri)?.text
     }
 
     private fun isPdfFile(uri: Uri, mimeType: String): Boolean {
@@ -1613,7 +1615,21 @@ class AppRepository @Inject constructor(
                     variantLabel = variant.label,
                 )
             }
-        return candidates.maxByOrNull { it.score }?.document
+        candidates.maxByOrNull { it.score }?.document?.let { return it }
+        val sourceText = recognizeImageTextFromSourceUri(uri) ?: return null
+        return parseOrderOfPlayFromRecognizedText(sourceText)
+    }
+
+    private suspend fun recognizeImageTextFromSourceUri(uri: Uri): Text? = withContext(Dispatchers.IO) {
+        runCatching {
+            val image = InputImage.fromFilePath(appContext, uri)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            try {
+                Tasks.await(recognizer.process(image))
+            } finally {
+                recognizer.close()
+            }
+        }.getOrNull()
     }
 
     private suspend fun recognizeImageTextVariants(uri: Uri): List<RecognizedImageVariant> = withContext(Dispatchers.IO) {
