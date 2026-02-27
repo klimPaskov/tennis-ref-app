@@ -1620,15 +1620,15 @@ class AppRepository @Inject constructor(
 
         val matches = mutableListOf<ImportedOrderMatch>()
         rowBands.sortedBy { it.order }.forEach { row ->
+            val rowLines = ocrLines
+                .filter { line ->
+                    line.centerY >= row.topBoundary &&
+                        line.centerY < row.bottomBoundary
+                }
+                .sortedBy { it.top }
+            val linesByColumn = groupRowLinesByColumn(rowLines, columns)
             columns.forEach columnLoop@ { column ->
-                val cellLines = ocrLines
-                    .filter { line ->
-                        line.centerX >= column.leftBoundary &&
-                            line.centerX < column.rightBoundary &&
-                            line.centerY >= row.topBoundary &&
-                            line.centerY < row.bottomBoundary
-                    }
-                    .sortedBy { it.top }
+                val cellLines = linesByColumn[column.name].orEmpty().sortedBy { it.top }
                 val entrants = parseMatchPairFromCellLines(cellLines) ?: return@columnLoop
                 val schedule = parseScheduleContextFromCell(cellLines)
                 matches += ImportedOrderMatch(
@@ -1643,7 +1643,6 @@ class AppRepository @Inject constructor(
         }
 
         if (matches.size < columns.size) return null
-        val harmonizedMatches = harmonizeRowSchedules(matches)
         val flatLines = recognized.text
             .replace('\u000C', '\n')
             .lineSequence()
@@ -1654,7 +1653,7 @@ class AppRepository @Inject constructor(
         return ImportedOrderDocument(
             tournamentName = extractTournamentName(flatLines) ?: "Imported Order Of Play",
             courts = columns.map { it.name },
-            matches = harmonizedMatches,
+            matches = matches,
         )
     }
 
@@ -1948,33 +1947,25 @@ class AppRepository @Inject constructor(
         return ScheduleContext(label = scheduleLabel, manualNotBefore = manualNotBefore)
     }
 
-    private fun harmonizeRowSchedules(matches: List<ImportedOrderMatch>): List<ImportedOrderMatch> {
-        if (matches.isEmpty()) return matches
-        return matches
-            .groupBy { it.order }
-            .toSortedMap()
-            .values
-            .flatMap { rowMatches ->
-                val rowSchedule = rowMatches
-                    .map { match -> parseScheduleContextFromText(match.scheduleLabel) }
-                    .firstOrNull { context ->
-                        context.manualNotBefore != null ||
-                            context.label.contains("Not Before", ignoreCase = true) ||
-                            context.label.contains("Starting at", ignoreCase = true)
-                    }
-                    ?: return@flatMap rowMatches
-
-                rowMatches.map { match ->
-                    if (match.manualNotBefore == null && match.scheduleLabel.equals("Followed By", ignoreCase = true)) {
-                        match.copy(
-                            scheduleLabel = rowSchedule.label,
-                            manualNotBefore = rowSchedule.manualNotBefore,
-                        )
-                    } else {
-                        match
-                    }
-                }
-            }
+    private fun groupRowLinesByColumn(
+        rowLines: List<OcrLine>,
+        columns: List<CourtColumnLayout>,
+    ): Map<String, List<OcrLine>> {
+        if (rowLines.isEmpty() || columns.isEmpty()) return emptyMap()
+        val grouped = columns.associate { it.name to mutableListOf<OcrLine>() }
+        rowLines.forEach { line ->
+            val bestColumn = columns.maxByOrNull { column ->
+                val overlapLeft = maxOf(line.left, column.leftBoundary)
+                val overlapRight = minOf(line.right, column.rightBoundary)
+                (overlapRight - overlapLeft).coerceAtLeast(0f)
+            } ?: return@forEach
+            val overlapLeft = maxOf(line.left, bestColumn.leftBoundary)
+            val overlapRight = minOf(line.right, bestColumn.rightBoundary)
+            val overlap = (overlapRight - overlapLeft).coerceAtLeast(0f)
+            if (overlap <= 0f) return@forEach
+            grouped[bestColumn.name]?.add(line)
+        }
+        return grouped
     }
 
     private fun parseCourtName(raw: String): String? {
