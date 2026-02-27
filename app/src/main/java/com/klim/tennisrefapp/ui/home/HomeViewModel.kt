@@ -2,6 +2,7 @@ package com.klim.tennisrefapp.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.klim.tennisrefapp.data.timer.CourtTimerManager
 import com.klim.tennisrefapp.domain.repository.TournamentRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -28,6 +29,7 @@ private val DEFAULT_PRELOADED_OPTIONS = listOf(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val tournamentRepository: TournamentRepository,
+    private val timerManager: CourtTimerManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -40,6 +42,9 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
             val imported = tournamentRepository.reloadOrderOfPlayFromFile(uriString)
+            if (imported) {
+                timerManager.clearAllTimers()
+            }
             _uiState.value = HomeUiState(
                 isReloading = false,
                 message = if (imported) {
@@ -55,6 +60,9 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
             val reloaded = tournamentRepository.reloadOrderOfPlay()
+            if (reloaded) {
+                timerManager.clearAllTimers()
+            }
             _uiState.value = HomeUiState(
                 isReloading = false,
                 message = if (reloaded) {
@@ -70,6 +78,9 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isReloading = true, message = null)
             val loaded = tournamentRepository.loadPreloadedOrderOfPlay(preloadId)
+            if (loaded) {
+                timerManager.clearAllTimers()
+            }
             _uiState.value = HomeUiState(
                 isReloading = false,
                 message = if (loaded) {

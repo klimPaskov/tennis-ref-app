@@ -70,6 +70,10 @@ internal object CourtTimerPersistence {
             .toList()
     }
 
+    fun clearAll(context: Context) {
+        prefs(context).edit().clear().apply()
+    }
+
     private fun parse(raw: String): PersistedCourtTimer? {
         return runCatching {
             val json = JSONObject(raw)

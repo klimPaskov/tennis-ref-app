@@ -26,6 +26,7 @@ Keep referee timers reliable when navigating away from a court or when the app i
 - On app process restart, active persisted timers are restored:
   - active timers resume countdown in UI,
   - already expired timers are immediately completed and logged.
+- On order-of-play reload/import, all active/completed timer UI state is cleared so stale warm-up indicators do not carry over.
 
 ## Notes
 - Warm-up timer uses a stronger vibration pattern.

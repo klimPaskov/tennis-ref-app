@@ -71,6 +71,20 @@ class CourtTimerManager @Inject constructor(
 
     fun observeAllTimers(): Flow<Map<Long, CourtTimerState>> = state
 
+    fun clearAllTimers() {
+        val persistedCourtIds = CourtTimerPersistence.loadAll(appContext).map { it.courtId }
+        val allCourtIds = linkedSetOf<Long>().apply {
+            addAll(state.value.keys)
+            addAll(timerJobs.keys)
+            addAll(persistedCourtIds)
+        }
+        allCourtIds.forEach { courtId ->
+            stop(courtId)
+        }
+        state.value = emptyMap()
+        CourtTimerPersistence.clearAll(appContext)
+    }
+
     fun startOrRestart(
         courtId: Long,
         matchId: Long,
