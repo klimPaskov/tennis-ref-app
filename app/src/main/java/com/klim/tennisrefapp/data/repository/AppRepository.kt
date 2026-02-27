@@ -1958,7 +1958,11 @@ class AppRepository @Inject constructor(
                         candidate.id to MatchDependency(candidate.id, candidate.winnerTeamId)
                     },
                 )
-                val resolvedTeamId = slot.directTeamId ?: resolution.resolvedTeamId
+                val resolvedTeamId = if (winnerOfMatch == null) {
+                    slot.directTeamId
+                } else {
+                    resolution.resolvedTeamId
+                }
                 val players = resolvedTeamId?.let { context.teamPlayersByTeam[it].orEmpty() }
                     .orEmpty()
                     .map {
@@ -1973,7 +1977,11 @@ class AppRepository @Inject constructor(
                     },
                     players = players,
                     resolvedTeamId = resolvedTeamId,
-                    isResolved = resolvedTeamId != null,
+                    isResolved = if (winnerOfMatch == null) {
+                        resolvedTeamId != null
+                    } else {
+                        resolution.isResolved
+                    },
                     dependencyMatchId = winnerOfMatch,
                     dependencyCourtId = sourceMatch?.courtId,
                     dependencyLabel = sourceMatch?.let { match ->
