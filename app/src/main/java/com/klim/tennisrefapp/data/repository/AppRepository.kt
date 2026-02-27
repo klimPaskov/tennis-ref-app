@@ -1584,12 +1584,7 @@ class AppRepository @Inject constructor(
     }
 
     private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? {
-        val bestVariant = recognizeImageTextVariants(uri)
-            .maxByOrNull { it.text.text.length }
-            ?.text
-            ?.text
-        if (!bestVariant.isNullOrBlank()) return bestVariant
-        return recognizeImageTextFromSourceUri(uri)?.text
+        return recognizeStrongImageText(uri)?.text
     }
 
     private fun isPdfFile(uri: Uri, mimeType: String): Boolean {
@@ -1606,57 +1601,47 @@ class AppRepository @Inject constructor(
     }
 
     private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
-        val candidates = recognizeImageTextVariants(uri)
-            .mapNotNull { variant ->
-                val document = parseOrderOfPlayFromRecognizedText(variant.text) ?: return@mapNotNull null
-                ParsedImageImportCandidate(
-                    document = document,
-                    score = scoreImportedOrderDocument(document),
-                    variantLabel = variant.label,
-                )
-            }
-        candidates.maxByOrNull { it.score }?.document?.let { return it }
-        val sourceText = recognizeImageTextFromSourceUri(uri) ?: return null
-        return parseOrderOfPlayFromRecognizedText(sourceText)
+        val recognized = recognizeStrongImageText(uri) ?: return null
+        return parseOrderOfPlayFromRecognizedText(recognized)
     }
 
-    private suspend fun recognizeImageTextFromSourceUri(uri: Uri): Text? = withContext(Dispatchers.IO) {
+    private suspend fun recognizeStrongImageText(uri: Uri): Text? = withContext(Dispatchers.IO) {
         runCatching {
-            val image = InputImage.fromFilePath(appContext, uri)
+            val decoded = decodeBitmapFromUri(uri) ?: return@runCatching null
+            val baseBitmap = scaleBitmapIfNeeded(decoded, OCR_BASE_MAX_DIMENSION)
+            if (baseBitmap !== decoded && !decoded.isRecycled) {
+                decoded.recycle()
+            }
+            val upscaled = scaleBitmapByFactor(
+                source = baseBitmap,
+                factor = 1.4f,
+                maxDimension = OCR_VARIANT_MAX_DIMENSION,
+            )
+            if (!baseBitmap.isRecycled) {
+                baseBitmap.recycle()
+            }
+            val threshold = computeOtsuThreshold(upscaled)
+            val processed = toGrayscaleContrastBitmap(
+                source = upscaled,
+                contrast = 1.52f,
+                brightness = 12,
+                threshold = threshold,
+            )
+            if (!upscaled.isRecycled) {
+                upscaled.recycle()
+            }
+
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             try {
+                val image = InputImage.fromBitmap(processed, 0)
                 Tasks.await(recognizer.process(image))
             } finally {
                 recognizer.close()
-            }
-        }.getOrNull()
-    }
-
-    private suspend fun recognizeImageTextVariants(uri: Uri): List<RecognizedImageVariant> = withContext(Dispatchers.IO) {
-        val decoded = decodeBitmapFromUri(uri) ?: return@withContext emptyList()
-        val baseBitmap = scaleBitmapIfNeeded(decoded, OCR_BASE_MAX_DIMENSION)
-        val variants = buildOcrBitmapVariants(baseBitmap)
-        if (baseBitmap !== decoded && !decoded.isRecycled) {
-            decoded.recycle()
-        }
-
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        try {
-            variants.mapNotNull { variant ->
-                runCatching {
-                    val image = InputImage.fromBitmap(variant.bitmap, 0)
-                    val text = Tasks.await(recognizer.process(image))
-                    RecognizedImageVariant(label = variant.label, text = text)
-                }.getOrNull()
-            }
-        } finally {
-            recognizer.close()
-            variants.forEach { variant ->
-                if (!variant.bitmap.isRecycled) {
-                    variant.bitmap.recycle()
+                if (!processed.isRecycled) {
+                    processed.recycle()
                 }
             }
-        }
+        }.getOrNull()
     }
 
     private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
@@ -1704,27 +1689,6 @@ class AppRepository @Inject constructor(
         val targetHeight = (source.height * factor).roundToInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
         return scaleBitmapIfNeeded(scaled, maxDimension)
-    }
-
-    private fun buildOcrBitmapVariants(source: Bitmap): List<OcrBitmapVariant> {
-        val contrast = toGrayscaleContrastBitmap(source, contrast = 1.35f, brightness = 8)
-        val threshold = toGrayscaleContrastBitmap(
-            source = source,
-            contrast = 1.5f,
-            brightness = 10,
-            threshold = computeOtsuThreshold(source),
-        )
-        val upscaled = scaleBitmapByFactor(source, factor = 1.35f, maxDimension = OCR_VARIANT_MAX_DIMENSION)
-        val upscaledContrast = toGrayscaleContrastBitmap(upscaled, contrast = 1.32f, brightness = 10)
-        if (!upscaled.isRecycled) {
-            upscaled.recycle()
-        }
-        return listOf(
-            OcrBitmapVariant(label = "original", bitmap = source.copy(Bitmap.Config.ARGB_8888, false)),
-            OcrBitmapVariant(label = "contrast", bitmap = contrast),
-            OcrBitmapVariant(label = "threshold", bitmap = threshold),
-            OcrBitmapVariant(label = "upscaled_contrast", bitmap = upscaledContrast),
-        )
     }
 
     private fun toGrayscaleContrastBitmap(
@@ -1851,55 +1815,6 @@ class AppRepository @Inject constructor(
             courts = columns.map { it.name },
             matches = matches,
         )
-    }
-
-    private fun scoreImportedOrderDocument(document: ImportedOrderDocument): Int {
-        if (document.matches.isEmpty()) return Int.MIN_VALUE
-        val coveredCourts = document.matches.map { it.courtName }.distinct().size
-        val expectedCourts = document.courts.size.coerceAtLeast(1)
-        val coverageScore = (coveredCourts * 100) / expectedCourts
-        val matchScore = document.matches.size * 14
-        val scheduleScore = document.matches.sumOf { importedMatchScheduleScore(it.scheduleLabel) }
-        val entrantScore = document.matches.sumOf { importedEntrantScore(it.left) + importedEntrantScore(it.right) }
-        val continuityScore = document.matches
-            .groupBy { it.courtName }
-            .values
-            .sumOf { matches ->
-                matches.map { it.order }
-                    .distinct()
-                    .sorted()
-                    .zipWithNext()
-                    .count { (first, second) -> second == first + 1 } * 5
-            }
-        return coverageScore + matchScore + scheduleScore + entrantScore + continuityScore
-    }
-
-    private fun importedEntrantScore(entrant: ParsedEntrant): Int {
-        val words = entrant.name.split(' ').filter { it.isNotBlank() }
-        val wordScore = when (words.size) {
-            in 2..4 -> 10
-            1 -> -10
-            else -> 2
-        }
-        val countryScore = if (entrant.countryCode != null) 6 else -2
-        val seedScore = if (entrant.seed != null) 2 else 0
-        val tokenScore = words.fold(0) { acc, word ->
-            acc + when {
-                word.length <= 1 -> -4
-                word.length in 2..18 -> 1
-                else -> -2
-            }
-        }
-        return wordScore + countryScore + seedScore + tokenScore
-    }
-
-    private fun importedMatchScheduleScore(label: String): Int {
-        return when {
-            label.contains("Not Before", ignoreCase = true) -> 6
-            label.contains("Starting at", ignoreCase = true) -> 4
-            label.contains("Followed By", ignoreCase = true) -> 3
-            else -> 0
-        }
     }
 
     private fun extractOcrLines(recognized: Text): List<OcrLine> {
@@ -3111,22 +3026,6 @@ class AppRepository @Inject constructor(
         val tournamentName: String,
         val courts: List<String>,
         val matches: List<ImportedOrderMatch>,
-    )
-
-    private data class OcrBitmapVariant(
-        val label: String,
-        val bitmap: Bitmap,
-    )
-
-    private data class RecognizedImageVariant(
-        val label: String,
-        val text: Text,
-    )
-
-    private data class ParsedImageImportCandidate(
-        val document: ImportedOrderDocument,
-        val score: Int,
-        val variantLabel: String,
     )
 
     private companion object {
