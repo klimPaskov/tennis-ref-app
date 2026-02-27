@@ -1,9 +1,6 @@
 package com.klim.tennisrefapp.data.repository
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Color
 import android.net.Uri
 import androidx.room.withTransaction
 import com.klim.tennisrefapp.data.local.AppDatabase
@@ -89,7 +86,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -1583,8 +1579,8 @@ class AppRepository @Inject constructor(
         }
     }
 
-    private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? {
-        return recognizeStrongImageText(uri)?.text
+    private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? = withContext(Dispatchers.IO) {
+        recognizeImageText(uri)?.text
     }
 
     private fun isPdfFile(uri: Uri, mimeType: String): Boolean {
@@ -1600,159 +1596,20 @@ class AppRepository @Inject constructor(
             lower.endsWith(".webp")
     }
 
-    private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
-        val recognized = recognizeStrongImageText(uri) ?: return null
-        return parseOrderOfPlayFromRecognizedText(recognized)
-    }
-
-    private suspend fun recognizeStrongImageText(uri: Uri): Text? = withContext(Dispatchers.IO) {
+    private suspend fun recognizeImageText(uri: Uri): Text? = withContext(Dispatchers.IO) {
         runCatching {
-            val decoded = decodeBitmapFromUri(uri) ?: return@runCatching null
-            val baseBitmap = scaleBitmapIfNeeded(decoded, OCR_BASE_MAX_DIMENSION)
-            if (baseBitmap !== decoded && !decoded.isRecycled) {
-                decoded.recycle()
-            }
-            val upscaled = scaleBitmapByFactor(
-                source = baseBitmap,
-                factor = 1.4f,
-                maxDimension = OCR_VARIANT_MAX_DIMENSION,
-            )
-            if (!baseBitmap.isRecycled) {
-                baseBitmap.recycle()
-            }
-            val threshold = computeOtsuThreshold(upscaled)
-            val processed = toGrayscaleContrastBitmap(
-                source = upscaled,
-                contrast = 1.52f,
-                brightness = 12,
-                threshold = threshold,
-            )
-            if (!upscaled.isRecycled) {
-                upscaled.recycle()
-            }
-
+            val image = InputImage.fromFilePath(appContext, uri)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             try {
-                val image = InputImage.fromBitmap(processed, 0)
                 Tasks.await(recognizer.process(image))
             } finally {
                 recognizer.close()
-                if (!processed.isRecycled) {
-                    processed.recycle()
-                }
             }
         }.getOrNull()
     }
 
-    private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
-        val resolver = appContext.contentResolver
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, bounds)
-        } ?: return null
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-        val sampleSize = calculateInSampleSize(
-            width = bounds.outWidth,
-            height = bounds.outHeight,
-            maxDimension = OCR_BASE_MAX_DIMENSION * 2,
-        )
-        val decodeOptions = BitmapFactory.Options().apply {
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            inSampleSize = sampleSize
-        }
-        return resolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, decodeOptions)
-        }
-    }
-
-    private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
-        var sample = 1
-        while (width / sample > maxDimension || height / sample > maxDimension) {
-            sample *= 2
-        }
-        return sample.coerceAtLeast(1)
-    }
-
-    private fun scaleBitmapIfNeeded(source: Bitmap, maxDimension: Int): Bitmap {
-        val maxSide = maxOf(source.width, source.height)
-        if (maxSide <= maxDimension) return source
-        val scale = maxDimension.toFloat() / maxSide.toFloat()
-        val targetWidth = (source.width * scale).roundToInt().coerceAtLeast(1)
-        val targetHeight = (source.height * scale).roundToInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
-    }
-
-    private fun scaleBitmapByFactor(source: Bitmap, factor: Float, maxDimension: Int): Bitmap {
-        if (factor <= 1f) return source.copy(Bitmap.Config.ARGB_8888, false)
-        val targetWidth = (source.width * factor).roundToInt().coerceAtLeast(1)
-        val targetHeight = (source.height * factor).roundToInt().coerceAtLeast(1)
-        val scaled = Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
-        return scaleBitmapIfNeeded(scaled, maxDimension)
-    }
-
-    private fun toGrayscaleContrastBitmap(
-        source: Bitmap,
-        contrast: Float,
-        brightness: Int,
-        threshold: Int? = null,
-    ): Bitmap {
-        val width = source.width
-        val height = source.height
-        val input = IntArray(width * height)
-        val output = IntArray(width * height)
-        source.getPixels(input, 0, width, 0, 0, width, height)
-
-        for (index in input.indices) {
-            val color = input[index]
-            val gray = ((Color.red(color) * 77) + (Color.green(color) * 150) + (Color.blue(color) * 29)) shr 8
-            val adjusted = ((gray - 128f) * contrast + 128f + brightness).roundToInt().coerceIn(0, 255)
-            val finalGray = threshold?.let { cut -> if (adjusted >= cut) 255 else 0 } ?: adjusted
-            output[index] = Color.argb(255, finalGray, finalGray, finalGray)
-        }
-
-        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
-            setPixels(output, 0, width, 0, 0, width, height)
-        }
-    }
-
-    private fun computeOtsuThreshold(source: Bitmap): Int {
-        val histogram = IntArray(256)
-        val pixels = IntArray(source.width * source.height)
-        source.getPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
-        pixels.forEach { color ->
-            val gray = ((Color.red(color) * 77) + (Color.green(color) * 150) + (Color.blue(color) * 29)) shr 8
-            histogram[gray]++
-        }
-
-        val total = pixels.size.toFloat().coerceAtLeast(1f)
-        var sum = 0f
-        for (value in histogram.indices) {
-            sum += value.toFloat() * histogram[value]
-        }
-
-        var sumBackground = 0f
-        var weightBackground = 0f
-        var maxVariance = -1f
-        var threshold = 128
-        for (candidate in histogram.indices) {
-            weightBackground += histogram[candidate]
-            if (weightBackground <= 0f) continue
-            val weightForeground = total - weightBackground
-            if (weightForeground <= 0f) break
-            sumBackground += candidate.toFloat() * histogram[candidate]
-            val meanBackground = sumBackground / weightBackground
-            val meanForeground = (sum - sumBackground) / weightForeground
-            val variance = weightBackground * weightForeground * (meanBackground - meanForeground) * (meanBackground - meanForeground)
-            if (variance > maxVariance) {
-                maxVariance = variance
-                threshold = candidate
-            }
-        }
-        return threshold.coerceIn(80, 200)
-    }
-
-    private fun parseOrderOfPlayFromRecognizedText(recognized: Text): ImportedOrderDocument? {
+    private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
+        val recognized = recognizeImageText(uri) ?: return null
         val ocrLines = extractOcrLines(recognized)
         if (ocrLines.isEmpty()) return null
 
@@ -2483,20 +2340,18 @@ class AppRepository @Inject constructor(
                 !token.equals("VS", ignoreCase = true)
         }.toMutableList()
 
-        while (filtered.size >= 3 && isLikelyNoiseNameToken(filtered.last())) {
+        while (filtered.size >= 2 && isLikelyNoiseNameToken(filtered.last())) {
             filtered.removeAt(filtered.lastIndex)
         }
         return filtered
     }
 
     private fun isLikelyNoiseNameToken(token: String): Boolean {
-        if (token.length !in 2..3) return false
-        if (token != token.uppercase()) return false
-        val letters = token.filter { it.isLetter() }
-        if (letters.isEmpty()) return true
-        val ambiguousCount = letters.count { it in OCR_AMBIGUOUS_LETTERS }
-        val vowelCount = letters.count { it.lowercaseChar() in setOf('a', 'e', 'i', 'o', 'u', 'y') }
-        return ambiguousCount >= letters.length - 1 && vowelCount <= 1
+        val normalized = token.lowercase()
+        if (normalized in OCR_NOISE_TOKENS) return true
+        return token.length <= 3 &&
+            token == token.uppercase() &&
+            token.all { it in "IiLlZzSsrR0123456789" }
     }
 
     private fun normalizePersonNameCase(name: String): String {
@@ -2709,20 +2564,14 @@ class AppRepository @Inject constructor(
         if (cleaned.isBlank()) return null
         val tokens = cleaned
             .split(' ')
-            .mapNotNull { rawToken ->
-                val token = normalizeNameToken(rawToken)
-                if (
-                    token.isNotBlank() &&
+            .map(::normalizeNameToken)
+            .filter { token ->
+                token.isNotBlank() &&
                     token.any { it.isLetter() } &&
                     token.length > 1 &&
                     !token.equals("AND", ignoreCase = true) &&
                     !tokenMatchesCountry(token, matchedCountry) &&
-                    !isLikelySeedArtifactToken(rawToken, token)
-                ) {
-                    token
-                } else {
-                    null
-                }
+                    !isLikelySeedArtifactToken(token)
             }
         val normalizedTokens = cleanupNameTokens(tokens)
         if (normalizedTokens.isEmpty()) return null
@@ -2747,16 +2596,11 @@ class AppRepository @Inject constructor(
         return normalized == matched || normalized == iso2
     }
 
-    private fun isLikelySeedArtifactToken(rawToken: String, normalizedToken: String): Boolean {
-        val raw = rawToken.trim()
-        if (raw.isBlank()) return false
-        if (raw.any { it.isDigit() }) return true
-        if (raw.any { it == '[' || it == ']' || it == '|' || it == '(' || it == ')' }) {
-            return true
-        }
-        return normalizedToken.length <= 2 &&
-            normalizedToken == normalizedToken.uppercase() &&
-            normalizedToken.all { it in OCR_AMBIGUOUS_LETTERS }
+    private fun isLikelySeedArtifactToken(token: String): Boolean {
+        if (token.isBlank()) return false
+        if (token.any { it.isDigit() }) return true
+        if (token.contains('[') || token.contains(']') || token.contains('|')) return true
+        return token.length <= 2 && token.all { it in "IiLlZzSsrR" }
     }
 
     private fun normalizeNameToken(raw: String): String {
@@ -3031,8 +2875,6 @@ class AppRepository @Inject constructor(
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
-        const val OCR_BASE_MAX_DIMENSION = 2600
-        const val OCR_VARIANT_MAX_DIMENSION = 3200
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
@@ -3057,7 +2899,7 @@ class AppRepository @Inject constructor(
             "UKR" to "UA",
         )
         val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
-        val OCR_AMBIGUOUS_LETTERS = setOf('I', 'L', 'R', 'S', 'Z', 'B')
+        val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr", "la")
     }
 }
 
