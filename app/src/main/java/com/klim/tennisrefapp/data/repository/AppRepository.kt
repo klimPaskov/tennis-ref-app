@@ -502,15 +502,11 @@ class AppRepository @Inject constructor(
             match("Court 8", 2, entrant("Maryna Levadna", "UKR"), entrant("Marie Johanna Lapimaa", "EST")),
             match("Court 8", 3, entrant("Ewangelina Penkevych", "POL"), entrant("Nora Olivia Adamson", "EST")),
             match("Court 8", 4, entrant("Hitoshi Shirabe", "JPN"), entrant("Mark Gregor Toniste", "EST")),
-            match("Court 9", 1, entrant("Olivia Martins", "POL"), entrant("Karina Metsa", "EST")),
-            match("Court 9", 2, entrant("Mikko Aaltonen", "FIN"), entrant("Tobias Rehn", "SWE")),
-            match("Court 9", 3, entrant("Nina Berg", "SWE"), entrant("Kristina Saar", "EST")),
-            match("Court 9", 4, entrant("Oskar Lund", "SWE"), entrant("Marek Tamm", "EST")),
         )
 
         return ImportedOrderDocument(
             tournamentName = "J60 Tallinn (Verified Preloaded)",
-            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
+            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8"),
             matches = matches,
         )
     }
