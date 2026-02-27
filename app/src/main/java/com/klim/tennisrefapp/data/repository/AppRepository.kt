@@ -2340,18 +2340,20 @@ class AppRepository @Inject constructor(
                 !token.equals("VS", ignoreCase = true)
         }.toMutableList()
 
-        while (filtered.size >= 2 && isLikelyNoiseNameToken(filtered.last())) {
+        while (filtered.size >= 3 && isLikelyNoiseNameToken(filtered.last())) {
             filtered.removeAt(filtered.lastIndex)
         }
         return filtered
     }
 
     private fun isLikelyNoiseNameToken(token: String): Boolean {
-        val normalized = token.lowercase()
-        if (normalized in OCR_NOISE_TOKENS) return true
-        return token.length <= 3 &&
-            token == token.uppercase() &&
-            token.all { it in "IiLlZzSsrR0123456789" }
+        if (token.length !in 2..3) return false
+        if (token != token.uppercase()) return false
+        val letters = token.filter { it.isLetter() }
+        if (letters.isEmpty()) return true
+        val ambiguousCount = letters.count { it in OCR_AMBIGUOUS_LETTERS }
+        val vowelCount = letters.count { it.lowercaseChar() in setOf('a', 'e', 'i', 'o', 'u', 'y') }
+        return ambiguousCount >= letters.length - 1 && vowelCount <= 1
     }
 
     private fun normalizePersonNameCase(name: String): String {
@@ -2564,14 +2566,20 @@ class AppRepository @Inject constructor(
         if (cleaned.isBlank()) return null
         val tokens = cleaned
             .split(' ')
-            .map(::normalizeNameToken)
-            .filter { token ->
-                token.isNotBlank() &&
+            .mapNotNull { rawToken ->
+                val token = normalizeNameToken(rawToken)
+                if (
+                    token.isNotBlank() &&
                     token.any { it.isLetter() } &&
                     token.length > 1 &&
                     !token.equals("AND", ignoreCase = true) &&
                     !tokenMatchesCountry(token, matchedCountry) &&
-                    !isLikelySeedArtifactToken(token)
+                    !isLikelySeedArtifactToken(rawToken, token)
+                ) {
+                    token
+                } else {
+                    null
+                }
             }
         val normalizedTokens = cleanupNameTokens(tokens)
         if (normalizedTokens.isEmpty()) return null
@@ -2596,11 +2604,16 @@ class AppRepository @Inject constructor(
         return normalized == matched || normalized == iso2
     }
 
-    private fun isLikelySeedArtifactToken(token: String): Boolean {
-        if (token.isBlank()) return false
-        if (token.any { it.isDigit() }) return true
-        if (token.contains('[') || token.contains(']') || token.contains('|')) return true
-        return token.length <= 2 && token.all { it in "IiLlZzSsrR" }
+    private fun isLikelySeedArtifactToken(rawToken: String, normalizedToken: String): Boolean {
+        val raw = rawToken.trim()
+        if (raw.isBlank()) return false
+        if (raw.any { it.isDigit() }) return true
+        if (raw.any { it == '[' || it == ']' || it == '|' || it == '(' || it == ')' }) {
+            return true
+        }
+        return normalizedToken.length <= 2 &&
+            normalizedToken == normalizedToken.uppercase() &&
+            normalizedToken.all { it in OCR_AMBIGUOUS_LETTERS }
     }
 
     private fun normalizeNameToken(raw: String): String {
@@ -2899,7 +2912,7 @@ class AppRepository @Inject constructor(
             "UKR" to "UA",
         )
         val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
-        val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr", "la")
+        val OCR_AMBIGUOUS_LETTERS = setOf('I', 'L', 'R', 'S', 'Z', 'B')
     }
 }
 
