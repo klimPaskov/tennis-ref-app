@@ -17,6 +17,11 @@ class CourtTimerAlarmReceiver : BroadcastReceiver() {
         val courtName = intent.getStringExtra(EXTRA_COURT_NAME).orEmpty()
         val timerTypeName = intent.getStringExtra(EXTRA_TIMER_TYPE).orEmpty()
         val expectedEndAtMillis = intent.getLongExtra(EXTRA_END_AT, -1L)
+        val subjectPlayerId = intent.getLongExtra(EXTRA_SUBJECT_PLAYER_ID, -1L)
+            .takeIf { it > 0L }
+        val subjectPlayerName = intent.getStringExtra(EXTRA_SUBJECT_PLAYER_NAME)
+            ?.trim()
+            ?.ifBlank { null }
         val timerType = runCatching { CourtTimerType.valueOf(timerTypeName) }.getOrNull() ?: return
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) return
 
@@ -66,6 +71,14 @@ class CourtTimerAlarmReceiver : BroadcastReceiver() {
                     .putString(CourtTimerFinishedWorker.KEY_TIMER_TYPE, timerType.name)
                     .putBoolean(CourtTimerFinishedWorker.KEY_SKIP_ALERT, true)
                     .putLong(CourtTimerFinishedWorker.KEY_END_AT, persisted.endAtMillis)
+                    .putLong(
+                        CourtTimerFinishedWorker.KEY_SUBJECT_PLAYER_ID,
+                        subjectPlayerId ?: persisted.subjectPlayerId ?: -1L,
+                    )
+                    .putString(
+                        CourtTimerFinishedWorker.KEY_SUBJECT_PLAYER_NAME,
+                        subjectPlayerName ?: persisted.subjectPlayerName,
+                    )
                     .build(),
             )
             .build()
@@ -84,5 +97,7 @@ class CourtTimerAlarmReceiver : BroadcastReceiver() {
         const val EXTRA_COURT_NAME = "extra_court_name"
         const val EXTRA_TIMER_TYPE = "extra_timer_type"
         const val EXTRA_END_AT = "extra_end_at"
+        const val EXTRA_SUBJECT_PLAYER_ID = "extra_subject_player_id"
+        const val EXTRA_SUBJECT_PLAYER_NAME = "extra_subject_player_name"
     }
 }

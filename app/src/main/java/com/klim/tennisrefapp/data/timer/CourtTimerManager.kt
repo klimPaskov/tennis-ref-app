@@ -49,6 +49,8 @@ data class CourtTimerState(
     val timerType: CourtTimerType,
     val remainingMillis: Long,
     val isRunning: Boolean,
+    val subjectPlayerId: Long? = null,
+    val subjectPlayerName: String? = null,
 )
 
 @Singleton
@@ -90,12 +92,15 @@ class CourtTimerManager @Inject constructor(
         matchId: Long,
         courtName: String,
         timerType: CourtTimerType,
+        subjectPlayerId: Long? = null,
+        subjectPlayerName: String? = null,
     ) {
         val running = state.value[courtId]
         if (running != null &&
             running.isRunning &&
             running.matchId == matchId &&
-            running.timerType == timerType
+            running.timerType == timerType &&
+            running.subjectPlayerId == subjectPlayerId
         ) {
             return
         }
@@ -108,6 +113,8 @@ class CourtTimerManager @Inject constructor(
             courtName = courtName,
             timerType = timerType,
             endAtMillis = endAtMillis,
+            subjectPlayerId = subjectPlayerId,
+            subjectPlayerName = subjectPlayerName,
         )
 
         CourtTimerPersistence.save(appContext, timer)
@@ -115,7 +122,7 @@ class CourtTimerManager @Inject constructor(
         scheduleFinishAlarm(timer)
         scheduleWarningAlarm(timer)
         scheduleWarningWorker(timer)
-        logTimerEvent(courtId, matchId, timerType, "START")
+        logTimerEvent(courtId, matchId, timerType, "START", subjectPlayerId, subjectPlayerName)
         launchTicker(timer)
     }
 
@@ -132,7 +139,14 @@ class CourtTimerManager @Inject constructor(
         CourtTimerPersistence.remove(appContext, courtId)
         state.value = state.value.toMutableMap().also { map -> map.remove(courtId) }
         if (current != null && current.isRunning && current.timerType != CourtTimerType.WARMUP) {
-            logTimerEvent(courtId, current.matchId, current.timerType, "STOP")
+            logTimerEvent(
+                courtId = courtId,
+                matchId = current.matchId,
+                timerType = current.timerType,
+                action = "STOP",
+                subjectPlayerId = current.subjectPlayerId,
+                subjectPlayerName = current.subjectPlayerName,
+            )
         }
     }
 
@@ -141,14 +155,30 @@ class CourtTimerManager @Inject constructor(
         matchId: Long,
         timerType: CourtTimerType,
         action: String,
+        subjectPlayerId: Long? = null,
+        subjectPlayerName: String? = null,
     ) {
+        val message = buildString {
+            append("TIMER|")
+            append(timerType.name)
+            append("|")
+            append(action)
+            if (subjectPlayerId != null) {
+                append("|playerId=")
+                append(subjectPlayerId)
+            }
+            if (!subjectPlayerName.isNullOrBlank()) {
+                append("|playerName=")
+                append(subjectPlayerName)
+            }
+        }
         scope.launch {
             eventLogRepository.logEvent(
                 matchId = matchId,
                 courtId = courtId,
                 kind = MatchEventKind.TIMER,
-                offenderPlayerId = null,
-                message = "TIMER|${timerType.name}|$action",
+                offenderPlayerId = subjectPlayerId,
+                message = message,
             )
         }
     }
@@ -166,6 +196,8 @@ class CourtTimerManager @Inject constructor(
                         timerType = timer.timerType,
                         remainingMillis = remaining,
                         isRunning = remaining > 0L,
+                        subjectPlayerId = timer.subjectPlayerId,
+                        subjectPlayerName = timer.subjectPlayerName,
                     )
                 }
 
@@ -191,6 +223,8 @@ class CourtTimerManager @Inject constructor(
                     .putString(CourtTimerFinishedWorker.KEY_TIMER_TYPE, timer.timerType.name)
                     .putBoolean(CourtTimerFinishedWorker.KEY_SKIP_ALERT, skipAlert)
                     .putLong(CourtTimerFinishedWorker.KEY_END_AT, timer.endAtMillis)
+                    .putLong(CourtTimerFinishedWorker.KEY_SUBJECT_PLAYER_ID, timer.subjectPlayerId ?: -1L)
+                    .putString(CourtTimerFinishedWorker.KEY_SUBJECT_PLAYER_NAME, timer.subjectPlayerName)
                     .build(),
             )
             .build()
@@ -211,6 +245,8 @@ class CourtTimerManager @Inject constructor(
             courtName = timer.courtName,
             timerType = timer.timerType,
             endAtMillis = timer.endAtMillis,
+            subjectPlayerId = timer.subjectPlayerId,
+            subjectPlayerName = timer.subjectPlayerName,
             updateCurrent = true,
             warning = false,
         ) ?: return
@@ -233,6 +269,8 @@ class CourtTimerManager @Inject constructor(
             courtName = timer.courtName,
             timerType = timer.timerType,
             endAtMillis = timer.endAtMillis,
+            subjectPlayerId = timer.subjectPlayerId,
+            subjectPlayerName = timer.subjectPlayerName,
             updateCurrent = true,
             warning = true,
         ) ?: return
@@ -316,6 +354,8 @@ class CourtTimerManager @Inject constructor(
                 courtName = "",
                 timerType = CourtTimerType.WARMUP,
                 endAtMillis = 0L,
+                subjectPlayerId = null,
+                subjectPlayerName = null,
                 updateCurrent = false,
                 warning = false,
             ) ?: return
@@ -331,6 +371,8 @@ class CourtTimerManager @Inject constructor(
             courtName = "",
             timerType = CourtTimerType.WARMUP,
             endAtMillis = 0L,
+            subjectPlayerId = null,
+            subjectPlayerName = null,
             updateCurrent = false,
             warning = true,
         ) ?: return
@@ -344,6 +386,8 @@ class CourtTimerManager @Inject constructor(
         courtName: String,
         timerType: CourtTimerType,
         endAtMillis: Long,
+        subjectPlayerId: Long?,
+        subjectPlayerName: String?,
         updateCurrent: Boolean,
         warning: Boolean,
     ): PendingIntent? {
@@ -354,6 +398,8 @@ class CourtTimerManager @Inject constructor(
             putExtra(CourtTimerAlarmReceiver.EXTRA_COURT_NAME, courtName)
             putExtra(CourtTimerAlarmReceiver.EXTRA_TIMER_TYPE, timerType.name)
             putExtra(CourtTimerAlarmReceiver.EXTRA_END_AT, endAtMillis)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_SUBJECT_PLAYER_ID, subjectPlayerId ?: -1L)
+            putExtra(CourtTimerAlarmReceiver.EXTRA_SUBJECT_PLAYER_NAME, subjectPlayerName)
         }
         val flags = (if (updateCurrent) PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_NO_CREATE) or
             PendingIntent.FLAG_IMMUTABLE
@@ -378,6 +424,8 @@ class CourtTimerManager @Inject constructor(
                         timerType = timer.timerType,
                         remainingMillis = 0L,
                         isRunning = false,
+                        subjectPlayerId = timer.subjectPlayerId,
+                        subjectPlayerName = timer.subjectPlayerName,
                     )
                 }
                 scheduleFinishWorker(timer, skipAlert = true)

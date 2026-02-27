@@ -27,6 +27,10 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val timerTypeName = inputData.getString(KEY_TIMER_TYPE).orEmpty()
         val skipAlert = inputData.getBoolean(KEY_SKIP_ALERT, false)
         val expectedEndAtMillis = inputData.getLong(KEY_END_AT, -1L)
+        val subjectPlayerId = inputData.getLong(KEY_SUBJECT_PLAYER_ID, -1L).takeIf { it > 0L }
+        val subjectPlayerName = inputData.getString(KEY_SUBJECT_PLAYER_NAME)
+            ?.trim()
+            ?.ifBlank { null }
 
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) {
             return Result.success()
@@ -63,8 +67,22 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
                 matchId = matchId,
                 courtId = courtId,
                 kind = MatchEventKind.TIMER,
-                offenderPlayerId = null,
-                message = "TIMER|${timerType.name}|DONE",
+                offenderPlayerId = subjectPlayerId ?: persisted.subjectPlayerId,
+                message = buildString {
+                    append("TIMER|")
+                    append(timerType.name)
+                    append("|DONE")
+                    val playerId = subjectPlayerId ?: persisted.subjectPlayerId
+                    if (playerId != null) {
+                        append("|playerId=")
+                        append(playerId)
+                    }
+                    val playerName = subjectPlayerName ?: persisted.subjectPlayerName
+                    if (!playerName.isNullOrBlank()) {
+                        append("|playerName=")
+                        append(playerName)
+                    }
+                },
             )
         }
         if (timerType == CourtTimerType.WARMUP) {
@@ -90,6 +108,8 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         const val KEY_TIMER_TYPE = "timer_type"
         const val KEY_SKIP_ALERT = "skip_alert"
         const val KEY_END_AT = "end_at"
+        const val KEY_SUBJECT_PLAYER_ID = "subject_player_id"
+        const val KEY_SUBJECT_PLAYER_NAME = "subject_player_name"
 
         fun workName(courtId: Long): String = "court_timer_finish_$courtId"
     }

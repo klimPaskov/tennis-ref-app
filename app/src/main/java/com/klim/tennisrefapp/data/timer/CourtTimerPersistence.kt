@@ -9,6 +9,8 @@ internal data class PersistedCourtTimer(
     val courtName: String,
     val timerType: CourtTimerType,
     val endAtMillis: Long,
+    val subjectPlayerId: Long? = null,
+    val subjectPlayerName: String? = null,
 )
 
 internal object CourtTimerPersistence {
@@ -19,15 +21,23 @@ internal object CourtTimerPersistence {
     private const val FIELD_COURT_NAME = "courtName"
     private const val FIELD_TIMER_TYPE = "timerType"
     private const val FIELD_END_AT = "endAt"
+    private const val FIELD_SUBJECT_PLAYER_ID = "subjectPlayerId"
+    private const val FIELD_SUBJECT_PLAYER_NAME = "subjectPlayerName"
 
     fun save(context: Context, timer: PersistedCourtTimer) {
-        val json = JSONObject()
-            .put(FIELD_COURT_ID, timer.courtId)
-            .put(FIELD_MATCH_ID, timer.matchId)
-            .put(FIELD_COURT_NAME, timer.courtName)
-            .put(FIELD_TIMER_TYPE, timer.timerType.name)
-            .put(FIELD_END_AT, timer.endAtMillis)
-            .toString()
+        val json = JSONObject().apply {
+            put(FIELD_COURT_ID, timer.courtId)
+            put(FIELD_MATCH_ID, timer.matchId)
+            put(FIELD_COURT_NAME, timer.courtName)
+            put(FIELD_TIMER_TYPE, timer.timerType.name)
+            put(FIELD_END_AT, timer.endAtMillis)
+            if (timer.subjectPlayerId != null) {
+                put(FIELD_SUBJECT_PLAYER_ID, timer.subjectPlayerId)
+            }
+            if (!timer.subjectPlayerName.isNullOrBlank()) {
+                put(FIELD_SUBJECT_PLAYER_NAME, timer.subjectPlayerName)
+            }
+        }.toString()
         prefs(context).edit().putString(key(timer.courtId), json).apply()
     }
 
@@ -83,6 +93,8 @@ internal object CourtTimerPersistence {
                 courtName = json.getString(FIELD_COURT_NAME),
                 timerType = CourtTimerType.valueOf(json.getString(FIELD_TIMER_TYPE)),
                 endAtMillis = json.getLong(FIELD_END_AT),
+                subjectPlayerId = json.optLong(FIELD_SUBJECT_PLAYER_ID, -1L).takeIf { it > 0L },
+                subjectPlayerName = json.optString(FIELD_SUBJECT_PLAYER_NAME, "").ifBlank { null },
             )
         }.getOrNull()
     }
