@@ -1627,18 +1627,35 @@ class AppRepository @Inject constructor(
                 }
                 .sortedBy { it.top }
             val linesByColumn = groupRowLinesByColumn(rowLines, columns)
+            val rowPairs = mutableListOf<Pair<ImportedOrderMatch, ScheduleContext>>()
             columns.forEach columnLoop@ { column ->
                 val cellLines = linesByColumn[column.name].orEmpty().sortedBy { it.top }
                 val entrants = parseMatchPairFromCellLines(cellLines) ?: return@columnLoop
                 val schedule = parseScheduleContextFromCell(cellLines)
-                matches += ImportedOrderMatch(
+                rowPairs += ImportedOrderMatch(
                     courtName = column.name,
                     order = row.order,
                     left = entrants.first,
                     right = entrants.second,
                     scheduleLabel = schedule.label,
                     manualNotBefore = schedule.manualNotBefore,
-                )
+                ) to schedule
+            }
+            val explicitByKey = rowPairs
+                .map { (_, schedule) -> schedule }
+                .filter { it.explicitKeyword }
+                .groupingBy { schedule -> schedule.label to schedule.manualNotBefore }
+                .eachCount()
+            val rowFallback = explicitByKey.maxByOrNull { it.value }?.key
+            rowPairs.forEach { (match, schedule) ->
+                if (!schedule.explicitKeyword && rowFallback != null) {
+                    matches += match.copy(
+                        scheduleLabel = rowFallback.first,
+                        manualNotBefore = rowFallback.second,
+                    )
+                } else {
+                    matches += match
+                }
             }
         }
 
@@ -1925,14 +1942,26 @@ class AppRepository @Inject constructor(
     }
 
     private fun parseScheduleContextFromCell(cellLines: List<OcrLine>): ScheduleContext {
-        if (cellLines.isEmpty()) return ScheduleContext(label = "Followed By", manualNotBefore = null)
-        val joined = cellLines.joinToString(" ") { it.text }
-        return parseScheduleContextFromText(joined)
+        if (cellLines.isEmpty()) return ScheduleContext(label = "Followed By", manualNotBefore = null, explicitKeyword = false)
+        val sorted = cellLines.sortedBy { it.top }
+        val scheduleBoundary = sorted.indexOfFirst { line ->
+            isPotentialEntrantLine(line.text) || isVsToken(line.text)
+        }
+        val scheduleLines = when {
+            scheduleBoundary > 0 -> sorted.take(scheduleBoundary)
+            else -> sorted.take(3)
+        }
+        val headerJoined = scheduleLines.joinToString(" ") { it.text }
+        val parsedHeader = parseScheduleContextFromText(headerJoined)
+        if (parsedHeader.explicitKeyword) return parsedHeader
+        val fullJoined = sorted.joinToString(" ") { it.text }
+        return parseScheduleContextFromText(fullJoined)
     }
 
     private fun parseScheduleContextFromText(raw: String): ScheduleContext {
         val normalized = raw.normalizeSpaces()
-        val label = scheduleKeywordLabel(normalized) ?: "Followed By"
+        val keyword = scheduleKeywordLabel(normalized)
+        val label = keyword ?: "Followed By"
         val time = extractTime(normalized)
         val manualNotBefore = if (label == "Not Before" || label == "Starting at") {
             time?.let { toTodayMillis(it) }
@@ -1944,7 +1973,11 @@ class AppRepository @Inject constructor(
         } else {
             label
         }
-        return ScheduleContext(label = scheduleLabel, manualNotBefore = manualNotBefore)
+        return ScheduleContext(
+            label = scheduleLabel,
+            manualNotBefore = manualNotBefore,
+            explicitKeyword = keyword != null,
+        )
     }
 
     private fun groupRowLinesByColumn(
@@ -1954,15 +1987,18 @@ class AppRepository @Inject constructor(
         if (rowLines.isEmpty() || columns.isEmpty()) return emptyMap()
         val grouped = columns.associate { it.name to mutableListOf<OcrLine>() }
         rowLines.forEach { line ->
-            val bestColumn = columns.maxByOrNull { column ->
-                val overlapLeft = maxOf(line.left, column.leftBoundary)
-                val overlapRight = minOf(line.right, column.rightBoundary)
-                (overlapRight - overlapLeft).coerceAtLeast(0f)
+            val isEntrantLike = isPotentialEntrantLine(line.text) || isVsToken(line.text)
+            val bestColumn = if (isEntrantLike) {
+                columns.minByOrNull { column ->
+                    abs(line.centerX - ((column.leftBoundary + column.rightBoundary) / 2f))
+                }
+            } else {
+                columns.maxByOrNull { column ->
+                    val overlapLeft = maxOf(line.left, column.leftBoundary)
+                    val overlapRight = minOf(line.right, column.rightBoundary)
+                    (overlapRight - overlapLeft).coerceAtLeast(0f)
+                }
             } ?: return@forEach
-            val overlapLeft = maxOf(line.left, bestColumn.leftBoundary)
-            val overlapRight = minOf(line.right, bestColumn.rightBoundary)
-            val overlap = (overlapRight - overlapLeft).coerceAtLeast(0f)
-            if (overlap <= 0f) return@forEach
             grouped[bestColumn.name]?.add(line)
         }
         return grouped
@@ -2511,23 +2547,27 @@ class AppRepository @Inject constructor(
         val lowerBound = (aroundIndex - 20).coerceAtLeast(0)
         var candidateLabel = "Followed By"
         var candidateTime: String? = null
+        var explicitKeyword = false
         for (index in aroundIndex downTo lowerBound) {
             val line = lines[index]
             when {
                 line.contains("Not Before", ignoreCase = true) -> {
                     candidateLabel = "Not Before"
                     candidateTime = extractTime(line) ?: findNeighbourTime(lines, index)
+                    explicitKeyword = true
                     break
                 }
 
                 line.contains("Starting at", ignoreCase = true) -> {
                     candidateLabel = "Starting at"
                     candidateTime = extractTime(line) ?: findNeighbourTime(lines, index)
+                    explicitKeyword = true
                     break
                 }
 
                 line.contains("Followed By", ignoreCase = true) -> {
                     candidateLabel = "Followed By"
+                    explicitKeyword = true
                     break
                 }
             }
@@ -2538,7 +2578,7 @@ class AppRepository @Inject constructor(
             null
         }
         val label = if (candidateTime != null) "$candidateLabel $candidateTime" else candidateLabel
-        return ScheduleContext(label = label, manualNotBefore = manual)
+        return ScheduleContext(label = label, manualNotBefore = manual, explicitKeyword = explicitKeyword)
     }
 
     private fun findNeighbourTime(lines: List<String>, index: Int): String? {
@@ -2681,6 +2721,7 @@ class AppRepository @Inject constructor(
     private data class ScheduleContext(
         val label: String,
         val manualNotBefore: Long?,
+        val explicitKeyword: Boolean,
     )
 
     private data class CollectedName(
