@@ -3,6 +3,8 @@ package com.klim.tennisrefapp.ui.courtdetail
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.klim.tennisrefapp.data.settings.AppSettings
+import com.klim.tennisrefapp.data.settings.AppSettingsStore
 import com.klim.tennisrefapp.data.timer.CourtTimerManager
 import com.klim.tennisrefapp.data.timer.CourtTimerState
 import com.klim.tennisrefapp.data.timer.CourtTimerType
@@ -45,6 +47,7 @@ data class CourtDetailUiState(
     val matchEvents: List<MatchEvent> = emptyList(),
     val violationCountsByPlayer: Map<Long, ViolationCounts> = emptyMap(),
     val restPrompt: RestPrompt? = null,
+    val timerDurationsByType: Map<CourtTimerType, Long> = emptyMap(),
 )
 
 data class UiFeedback(
@@ -65,6 +68,7 @@ class CourtDetailViewModel @Inject constructor(
     private val playerRepository: PlayerRepository,
     private val eventLogRepository: EventLogRepository,
     private val timerManager: CourtTimerManager,
+    private val appSettingsStore: AppSettingsStore,
 ) : ViewModel() {
 
     private val courtId: Long = checkNotNull(savedStateHandle.get<Long>("courtId"))
@@ -88,6 +92,7 @@ class CourtDetailViewModel @Inject constructor(
         if (matchId <= 0L) return@flatMapLatest flowOf(null)
         timerManager.observeTimer(detail.courtId)
     }
+    private val settingsFlow = appSettingsStore.settings
 
     val uiState: StateFlow<CourtDetailUiState> = combine(
         detailFlow,
@@ -96,6 +101,7 @@ class CourtDetailViewModel @Inject constructor(
         restPrompt,
         timerFlow,
         eventsFlow,
+        settingsFlow,
     ) { values ->
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
@@ -104,6 +110,7 @@ class CourtDetailViewModel @Inject constructor(
         val timer = values[4] as CourtTimerState?
         @Suppress("UNCHECKED_CAST")
         val events = values[5] as List<MatchEvent>
+        val settings = values[6] as AppSettings
         val allowedServerIds = buildList {
             addAll(detail?.leftSide?.players?.map { it.playerId }.orEmpty())
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
@@ -122,6 +129,7 @@ class CourtDetailViewModel @Inject constructor(
             timerState = timer,
             matchEvents = events,
             violationCountsByPlayer = countViolations(events),
+            timerDurationsByType = buildTimerDurations(settings),
         )
     }.stateIn(
         scope = viewModelScope,
@@ -131,11 +139,15 @@ class CourtDetailViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(detailFlow, selectedServerPlayerId, timerFlow) { detail, selectedServer, timer ->
-                Triple(detail, selectedServer, timer)
-            }.collect { (detail, selectedServer, timer) ->
-                maybeStartWarmup(detail, selectedServer, timer)
-                maybeAutoStartAfterWarmup(detail, selectedServer, timer)
+            combine(detailFlow, selectedServerPlayerId, timerFlow, settingsFlow) { detail, selectedServer, timer, settings ->
+                arrayOf(detail, selectedServer, timer, settings)
+            }.collect { values ->
+                val detail = values[0] as CourtDetail?
+                val selectedServer = values[1] as Long?
+                val timer = values[2] as CourtTimerState?
+                val settings = values[3] as AppSettings
+                maybeStartWarmup(detail, selectedServer, timer, settings)
+                maybeAutoStartAfterWarmup(detail, selectedServer, timer, settings)
             }
         }
     }
@@ -207,6 +219,7 @@ class CourtDetailViewModel @Inject constructor(
             matchId = matchId,
             courtName = detail.courtName,
             timerType = timerType,
+            durationMillisOverride = uiState.value.timerDurationsByType[timerType],
         )
     }
 
@@ -237,6 +250,7 @@ class CourtDetailViewModel @Inject constructor(
             matchId = matchId,
             courtName = detail.courtName,
             timerType = CourtTimerType.MEDICAL_TIMEOUT,
+            durationMillisOverride = uiState.value.timerDurationsByType[CourtTimerType.MEDICAL_TIMEOUT],
             subjectPlayerId = player.playerId,
             subjectPlayerName = player.name,
         )
@@ -353,10 +367,12 @@ class CourtDetailViewModel @Inject constructor(
         detail: CourtDetail?,
         selectedServer: Long?,
         timerState: CourtTimerState?,
+        settings: AppSettings,
     ) {
         val match = detail ?: return
         val matchId = match.matchId ?: return
         if (match.status != CourtStatus.SCHEDULED) return
+        if (!settings.autoStartWarmup) return
         if (!match.canStartMatch || selectedServer == null) return
         if (warmupCompletedForMatchId == matchId) return
         if (warmupStartedForMatchId == matchId) return
@@ -368,6 +384,7 @@ class CourtDetailViewModel @Inject constructor(
             matchId = matchId,
             courtName = match.courtName,
             timerType = CourtTimerType.WARMUP,
+            durationMillisOverride = uiState.value.timerDurationsByType[CourtTimerType.WARMUP],
         )
         feedbackMessage.value = UiFeedback("Warm-up timer started.")
     }
@@ -376,10 +393,12 @@ class CourtDetailViewModel @Inject constructor(
         detail: CourtDetail?,
         selectedServer: Long?,
         timerState: CourtTimerState?,
+        settings: AppSettings,
     ) {
         val match = detail ?: return
         val matchId = match.matchId ?: return
         if (match.status != CourtStatus.SCHEDULED) return
+        if (!settings.autoStartMatchAfterWarmup) return
         if (selectedServer == null) return
         if (timerState?.timerType != CourtTimerType.WARMUP) return
         if (timerState.isRunning || timerState.remainingMillis > 0) return
@@ -500,5 +519,17 @@ class CourtDetailViewModel @Inject constructor(
 
     private companion object {
         val SET_SCORE_REGEX = Regex("(\\d+)\\s*[:-]\\s*(\\d+)")
+    }
+
+    private fun buildTimerDurations(settings: AppSettings): Map<CourtTimerType, Long> {
+        return mapOf(
+            CourtTimerType.WARMUP to settings.warmupMinutes * 60_000L,
+            CourtTimerType.SIDE_SWITCH to settings.sideSwitchSeconds * 1_000L,
+            CourtTimerType.SET_BREAK to settings.setBreakSeconds * 1_000L,
+            CourtTimerType.TOILET_BREAK to settings.toiletBreakSeconds * 1_000L,
+            CourtTimerType.OFF_COURT to settings.offCourtSeconds * 1_000L,
+            CourtTimerType.MEDICAL_TIMEOUT to settings.medicalTimeoutSeconds * 1_000L,
+            CourtTimerType.EQUIPMENT_FIX to settings.equipmentFixSeconds * 1_000L,
+        )
     }
 }

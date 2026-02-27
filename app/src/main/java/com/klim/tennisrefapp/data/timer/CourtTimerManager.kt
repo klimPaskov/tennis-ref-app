@@ -9,6 +9,7 @@ import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.klim.tennisrefapp.data.settings.AppSettingsStore
 import com.klim.tennisrefapp.data.work.CourtTimerFinishedWorker
 import com.klim.tennisrefapp.data.work.CourtTimerWarningWorker
 import com.klim.tennisrefapp.data.work.CourtWarmupPendingReminderWorker
@@ -59,6 +60,7 @@ class CourtTimerManager @Inject constructor(
     private val appContext: Context,
     private val eventLogRepository: EventLogRepository,
     private val workManager: WorkManager,
+    private val appSettingsStore: AppSettingsStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val state = MutableStateFlow<Map<Long, CourtTimerState>>(emptyMap())
@@ -92,6 +94,7 @@ class CourtTimerManager @Inject constructor(
         matchId: Long,
         courtName: String,
         timerType: CourtTimerType,
+        durationMillisOverride: Long? = null,
         subjectPlayerId: Long? = null,
         subjectPlayerName: String? = null,
     ) {
@@ -106,7 +109,9 @@ class CourtTimerManager @Inject constructor(
         }
         stop(courtId)
         CourtTimerAlerts.ensureChannel(appContext)
-        val endAtMillis = System.currentTimeMillis() + timerType.durationMillis
+        val durationMillis = durationMillisOverride
+            ?: appSettingsStore.durationMillis(timerType)
+        val endAtMillis = System.currentTimeMillis() + durationMillis
         val timer = PersistedCourtTimer(
             courtId = courtId,
             matchId = matchId,
@@ -259,6 +264,7 @@ class CourtTimerManager @Inject constructor(
 
     private fun scheduleWarningAlarm(timer: PersistedCourtTimer) {
         if (timer.timerType != CourtTimerType.WARMUP) return
+        if (!appSettingsStore.currentSettings().warmupOneMinuteWarning) return
         val warningAtMillis = timer.endAtMillis - 60_000L
         if (warningAtMillis <= System.currentTimeMillis()) return
         val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -317,6 +323,7 @@ class CourtTimerManager @Inject constructor(
 
     private fun scheduleWarningWorker(timer: PersistedCourtTimer) {
         if (timer.timerType != CourtTimerType.WARMUP) return
+        if (!appSettingsStore.currentSettings().warmupOneMinuteWarning) return
         val delay = (timer.endAtMillis - System.currentTimeMillis() - 60_000L).coerceAtLeast(0L)
         val request = OneTimeWorkRequestBuilder<CourtTimerWarningWorker>()
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)

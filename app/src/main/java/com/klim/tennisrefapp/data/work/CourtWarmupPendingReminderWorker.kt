@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.klim.tennisrefapp.data.local.dao.MatchDao
 import com.klim.tennisrefapp.data.local.entity.MatchStatus
+import com.klim.tennisrefapp.data.settings.AppSettingsStore
 import com.klim.tennisrefapp.data.timer.CourtTimerAlerts
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -20,12 +21,17 @@ class CourtWarmupPendingReminderWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val matchDao: MatchDao,
+    private val appSettingsStore: AppSettingsStore,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val courtId = inputData.getLong(KEY_COURT_ID, -1L)
         val matchId = inputData.getLong(KEY_MATCH_ID, -1L)
         val courtName = inputData.getString(KEY_COURT_NAME).orEmpty()
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) return Result.success()
+        if (!appSettingsStore.currentSettings().warmupPendingReminder) {
+            CourtTimerAlerts.cancelWarmupPending(applicationContext, courtId)
+            return Result.success()
+        }
 
         val match = matchDao.getById(matchId) ?: return Result.success()
         val stillPending = match.courtId == courtId &&

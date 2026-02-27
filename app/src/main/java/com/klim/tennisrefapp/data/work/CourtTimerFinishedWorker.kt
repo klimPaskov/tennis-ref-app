@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.klim.tennisrefapp.data.settings.AppSettingsStore
 import com.klim.tennisrefapp.data.timer.CourtTimerAlerts
 import com.klim.tennisrefapp.data.timer.CourtTimerPersistence
 import com.klim.tennisrefapp.data.timer.CourtTimerType
@@ -19,6 +20,7 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val eventLogRepository: EventLogRepository,
     private val matchRepository: MatchRepository,
+    private val appSettingsStore: AppSettingsStore,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val courtId = inputData.getLong(KEY_COURT_ID, -1L)
@@ -86,15 +88,32 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
             )
         }
         if (timerType == CourtTimerType.WARMUP) {
-            val startResult = matchRepository.autoStartMatchFromWarmup(matchId)
-            if (startResult != com.klim.tennisrefapp.domain.repository.StartMatchResult.Success) {
-                CourtWarmupPendingReminderWorker.scheduleNext(
-                    context = applicationContext,
-                    courtId = courtId,
-                    matchId = matchId,
-                    courtName = courtName,
-                )
+            val settings = appSettingsStore.currentSettings()
+            if (settings.autoStartMatchAfterWarmup) {
+                val startResult = matchRepository.autoStartMatchFromWarmup(matchId)
+                if (startResult != com.klim.tennisrefapp.domain.repository.StartMatchResult.Success &&
+                    settings.warmupPendingReminder
+                ) {
+                    CourtWarmupPendingReminderWorker.scheduleNext(
+                        context = applicationContext,
+                        courtId = courtId,
+                        matchId = matchId,
+                        courtName = courtName,
+                    )
+                } else if (startResult == com.klim.tennisrefapp.domain.repository.StartMatchResult.Success) {
+                    CourtTimerAlerts.cancelWarmupPending(applicationContext, courtId)
+                }
             } else {
+                if (settings.warmupPendingReminder) {
+                    CourtWarmupPendingReminderWorker.scheduleNext(
+                        context = applicationContext,
+                        courtId = courtId,
+                        matchId = matchId,
+                        courtName = courtName,
+                    )
+                }
+            }
+            if (!settings.warmupPendingReminder) {
                 CourtTimerAlerts.cancelWarmupPending(applicationContext, courtId)
             }
         }

@@ -344,6 +344,7 @@ private fun CourtDetailScreen(
     if (showTimerDialog && detail != null) {
         TimerDialog(
             timerState = uiState.timerState,
+            timerDurationsByType = uiState.timerDurationsByType,
             onDismiss = { showTimerDialog = false },
             onStart = { timerType ->
                 onStartTimer(timerType)
@@ -606,6 +607,7 @@ private fun InProgressActions(
 @Composable
 private fun TimerDialog(
     timerState: CourtTimerState?,
+    timerDurationsByType: Map<CourtTimerType, Long>,
     onDismiss: () -> Unit,
     onStart: (CourtTimerType) -> Unit,
     onStop: () -> Unit,
@@ -640,10 +642,11 @@ private fun TimerDialog(
 
                 Text("Start timer", style = MaterialTheme.typography.titleSmall)
                 inProgressTimers.forEach { timerType ->
+                    val duration = timerDurationsByType[timerType] ?: timerType.durationMillis
                     TextButton(onClick = { onStart(timerType) }, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Outlined.Schedule, contentDescription = null)
                         Text(
-                            text = " ${timerType.label} (${formatRemaining(timerType.durationMillis)})",
+                            text = " ${timerType.label} (${formatRemaining(duration)})",
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

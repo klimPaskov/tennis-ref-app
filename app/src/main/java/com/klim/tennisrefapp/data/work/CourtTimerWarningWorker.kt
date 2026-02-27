@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.klim.tennisrefapp.data.settings.AppSettingsStore
 import com.klim.tennisrefapp.data.timer.CourtTimerAlerts
 import com.klim.tennisrefapp.data.timer.CourtTimerPersistence
 import com.klim.tennisrefapp.data.timer.CourtTimerType
@@ -15,6 +16,7 @@ import kotlin.math.abs
 class CourtTimerWarningWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
+    private val appSettingsStore: AppSettingsStore,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val courtId = inputData.getLong(KEY_COURT_ID, -1L)
@@ -24,6 +26,10 @@ class CourtTimerWarningWorker @AssistedInject constructor(
         val expectedEndAtMillis = inputData.getLong(KEY_END_AT, -1L)
 
         if (courtId <= 0L || matchId <= 0L || courtName.isBlank()) return Result.success()
+        if (!appSettingsStore.currentSettings().warmupOneMinuteWarning) {
+            CourtTimerAlerts.cancelWarning(applicationContext, courtId)
+            return Result.success()
+        }
         val timerType = runCatching { CourtTimerType.valueOf(timerTypeName) }.getOrNull() ?: return Result.success()
         if (timerType != CourtTimerType.WARMUP) return Result.success()
 
