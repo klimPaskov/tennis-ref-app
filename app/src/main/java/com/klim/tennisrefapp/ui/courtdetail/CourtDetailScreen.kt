@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -474,8 +475,8 @@ private fun InProgressActions(
                 Icon(Icons.Outlined.WarningAmber, contentDescription = "Violations")
             }
         }
-        TextButton(onClick = onOpenArgumentSolver) {
-            Text("Solve")
+        FilledTonalIconButton(onClick = onOpenArgumentSolver, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Outlined.HelpOutline, contentDescription = "Solve argument")
         }
         FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
@@ -686,17 +687,21 @@ private fun ScoreArgumentSolverDialog(
                 )
                 TextField(
                     value = leftClaim,
-                    onValueChange = { leftClaim = sanitizeScoreClaim(it) },
+                    onValueChange = { leftClaim = formatScoreClaimInput(it) },
                     label = { Text("$leftName says") },
                     placeholder = { Text("4:3") },
                     singleLine = true,
                 )
                 TextField(
                     value = rightClaim,
-                    onValueChange = { rightClaim = sanitizeScoreClaim(it) },
+                    onValueChange = { rightClaim = formatScoreClaimInput(it) },
                     label = { Text("$rightName says") },
                     placeholder = { Text("3:4") },
                     singleLine = true,
+                )
+                Text(
+                    text = "Tip: type 43 and it becomes 4:3 automatically.",
+                    style = MaterialTheme.typography.bodySmall,
                 )
                 Text("Who serves now?", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1279,15 +1284,20 @@ private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
     }
 }
 
-private fun sanitizeScoreClaim(raw: String): String {
-    val digits = raw.filter { it.isDigit() || it == ':' }
-    if (digits.count { it == ':' } <= 1) return digits.take(5)
-    val firstColon = digits.indexOf(':')
-    val compact = digits.filter { it.isDigit() }
-    if (compact.length < 2) return compact
-    val left = compact.take(firstColon.coerceAtLeast(1)).take(2)
-    val right = compact.drop(left.length).take(2)
-    return if (right.isEmpty()) left else "$left:$right"
+private fun formatScoreClaimInput(raw: String): String {
+    val compact = raw.filter { it.isDigit() || it == ':' }
+    if (compact.contains(':')) {
+        val left = compact.substringBefore(':').filter { it.isDigit() }.take(2)
+        val right = compact.substringAfter(':').filter { it.isDigit() }.take(2)
+        return if (right.isBlank()) left else "$left:$right"
+    }
+    val digits = compact.filter { it.isDigit() }.take(4)
+    return when {
+        digits.length <= 1 -> digits
+        digits.length == 2 -> "${digits[0]}:${digits[1]}"
+        digits.length == 3 -> "${digits.take(2)}:${digits.drop(2)}"
+        else -> "${digits.take(2)}:${digits.drop(2)}"
+    }
 }
 
 private fun initialServerSide(detail: CourtDetail): ResolverSide? {
