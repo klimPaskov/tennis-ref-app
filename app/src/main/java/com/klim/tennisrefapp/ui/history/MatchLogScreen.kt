@@ -137,16 +137,20 @@ private fun eventTitle(kind: MatchEventKind, message: String?): String {
         MatchEventKind.VIOLATION -> "Violation"
         MatchEventKind.TIMER -> {
             if (message == null) return "Timer"
-            if (message.startsWith("SCORE_SNAPSHOT|")) return "Live Score Saved"
+            if (message.startsWith("SCORE_SNAPSHOT|")) return "Live Score Updated"
+            if (message.startsWith("ARGUMENT|")) return "Score Argument Logged"
             val parts = message.split("|")
-            val timerType = parts.getOrNull(1)?.uppercase().orEmpty()
+            val timerType = parts.getOrNull(1).orEmpty()
             val action = parts.getOrNull(2)?.uppercase().orEmpty()
-            when {
-                timerType == "WARMUP" && action == "START" -> "Warm-up Started"
-                timerType == "WARMUP" && action == "DONE" -> "Warm-up Ended"
-                timerType == "MEDICAL_TIMEOUT" && action == "START" -> "Medical Timeout Started"
-                timerType == "MEDICAL_TIMEOUT" && action == "DONE" -> "Medical Timeout Ended"
-                else -> "Timer"
+            val timerLabel = timerType
+                .lowercase()
+                .replace('_', ' ')
+                .replaceFirstChar { it.uppercase() }
+            when (action) {
+                "START" -> "$timerLabel Started"
+                "STOP" -> "$timerLabel Stopped"
+                "DONE" -> "$timerLabel Ended"
+                else -> "Timer Event"
             }
         }
     }
@@ -173,7 +177,19 @@ private fun normalizeForComparison(value: String): String {
 
 private fun formatTimerMessage(message: String): String {
     if (message.startsWith("SCORE_SNAPSHOT|")) {
-        return message.substringAfter("SCORE_SNAPSHOT|").trim()
+        val payload = message.substringAfter("SCORE_SNAPSHOT|")
+        val score = payload.substringBefore("|").trim()
+        val left = payload.split("|").firstOrNull { it.startsWith("left=") }?.substringAfter("=").orEmpty().trim()
+        val right = payload.split("|").firstOrNull { it.startsWith("right=") }?.substringAfter("=").orEmpty().trim()
+        val perspective = if (left.isNotBlank() || right.isNotBlank()) {
+            " (Left: ${left.ifBlank { "?" }}, Right: ${right.ifBlank { "?" }})"
+        } else {
+            ""
+        }
+        return score + perspective
+    }
+    if (message.startsWith("ARGUMENT|")) {
+        return formatArgumentMessage(message)
     }
     if (!message.startsWith("TIMER|")) return message
     val parts = message.split("|")
@@ -187,9 +203,24 @@ private fun formatTimerMessage(message: String): String {
     return when (action) {
         "start" -> if (playerName != null) "$timerType started for $playerName" else "$timerType started"
         "stop" -> if (playerName != null) "$timerType stopped for $playerName" else "$timerType stopped"
-        "done" -> if (playerName != null) "$timerType finished for $playerName" else "$timerType finished"
+        "done" -> if (playerName != null) "$timerType ended for $playerName" else "$timerType ended"
         else -> "$timerType $action".trim()
     }
+}
+
+private fun formatArgumentMessage(message: String): String {
+    if (!message.startsWith("ARGUMENT|")) return message
+    val parts = message.split("|")
+    val left = parts.firstOrNull { it.startsWith("left=") }?.substringAfter("=").orEmpty().ifBlank { null }
+    val right = parts.firstOrNull { it.startsWith("right=") }?.substringAfter("=").orEmpty().ifBlank { null }
+    val server = parts.firstOrNull { it.startsWith("server=") }?.substringAfter("=").orEmpty().ifBlank { null }
+    val result = parts.firstOrNull { it.startsWith("result=") }?.substringAfter("=").orEmpty().ifBlank { null }
+    return buildList {
+        if (left != null) add("Left claim: $left")
+        if (right != null) add("Right claim: $right")
+        if (server != null) add("Current server: $server")
+        if (result != null) add("Decision: $result")
+    }.joinToString(" • ")
 }
 
 private fun formatViolationMessage(message: String): String {
