@@ -23,6 +23,7 @@ data class PreloadedOrderOption(
 )
 
 private val DEFAULT_PRELOADED_OPTIONS = listOf(
+    PreloadedOrderOption(id = "28.02.2026", label = "28.02.2026"),
     PreloadedOrderOption(id = "example", label = "Example"),
 )
 
