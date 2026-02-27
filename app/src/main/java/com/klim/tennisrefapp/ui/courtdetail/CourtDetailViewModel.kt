@@ -26,8 +26,11 @@ import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -49,6 +52,10 @@ data class UiFeedback(
     val actionLabel: String? = null,
 )
 
+sealed interface CourtDetailNavigationEvent {
+    data object BackToCourts : CourtDetailNavigationEvent
+}
+
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
 class CourtDetailViewModel @Inject constructor(
@@ -64,6 +71,8 @@ class CourtDetailViewModel @Inject constructor(
     private val selectedServerPlayerId = MutableStateFlow<Long?>(null)
     private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
     private val restPrompt = MutableStateFlow<RestPrompt?>(null)
+    private val _navigationEvents = MutableSharedFlow<CourtDetailNavigationEvent>(extraBufferCapacity = 1)
+    val navigationEvents: SharedFlow<CourtDetailNavigationEvent> = _navigationEvents.asSharedFlow()
     private var warmupCompletedForMatchId: Long? = null
     private var warmupStartedForMatchId: Long? = null
 
@@ -244,8 +253,13 @@ class CourtDetailViewModel @Inject constructor(
             )
             feedbackMessage.value = when (result) {
                 EndMatchResult.Success -> {
+                    selectedServerPlayerId.value = null
+                    warmupCompletedForMatchId = null
+                    warmupStartedForMatchId = null
+                    timerManager.stop(courtId)
                     val prompt = matchRepository.getRestPrompt(matchId)
                     restPrompt.value = prompt
+                    _navigationEvents.tryEmit(CourtDetailNavigationEvent.BackToCourts)
                     if (prompt == null) {
                         UiFeedback("Final score submitted")
                     } else {

@@ -147,6 +147,14 @@ fun CourtDetailRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    LaunchedEffect(viewModel) {
+        viewModel.navigationEvents.collect { event ->
+            when (event) {
+                CourtDetailNavigationEvent.BackToCourts -> onBack()
+            }
+        }
+    }
+
     LaunchedEffect(uiState.feedbackMessage) {
         val feedback = uiState.feedbackMessage ?: return@LaunchedEffect
         snackbarHostState.currentSnackbarData?.dismiss()
