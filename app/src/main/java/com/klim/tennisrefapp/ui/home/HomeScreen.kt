@@ -62,6 +62,7 @@ fun HomeRoute(
         onReload = {
             pickOrderOfPlayLauncher.launch(arrayOf("image/*", "application/pdf", "text/plain", "*/*"))
         },
+        onLoadPreloaded = viewModel::onLoadPreloadedOrderOfPlay,
         onPlayers = onPlayers,
         onHistory = onHistory,
         snackbarHostState = snackbarHostState,
@@ -74,6 +75,7 @@ private fun HomeScreen(
     uiState: HomeUiState,
     onContinue: () -> Unit,
     onReload: () -> Unit,
+    onLoadPreloaded: () -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -106,6 +108,13 @@ private fun HomeScreen(
                 enabled = !uiState.isReloading,
             ) {
                 Text(if (uiState.isReloading) "Loading..." else "New Order Of Play")
+            }
+            Button(
+                onClick = onLoadPreloaded,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                enabled = !uiState.isReloading,
+            ) {
+                Text(if (uiState.isReloading) "Loading..." else "Load Preloaded Order Of Play")
             }
         }
     }

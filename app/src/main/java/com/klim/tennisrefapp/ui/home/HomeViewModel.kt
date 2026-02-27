@@ -41,6 +41,21 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun onLoadPreloadedOrderOfPlay() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isReloading = true, message = null)
+            val loaded = tournamentRepository.loadPreloadedOrderOfPlay()
+            _uiState.value = HomeUiState(
+                isReloading = false,
+                message = if (loaded) {
+                    "Loaded verified preloaded order of play."
+                } else {
+                    "Could not load preloaded order of play."
+                },
+            )
+        }
+    }
+
     fun clearMessage() {
         _uiState.value = _uiState.value.copy(message = null)
     }
