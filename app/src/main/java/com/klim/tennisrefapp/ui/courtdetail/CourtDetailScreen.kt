@@ -91,11 +91,27 @@ import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
 import kotlin.math.max
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 private data class ViolationTemplate(
     val name: String,
     val category: ViolationCategory,
+)
+
+private enum class ResolverSide {
+    LEFT,
+    RIGHT,
+}
+
+private data class ScoreCandidate(
+    val leftGames: Int,
+    val rightGames: Int,
+)
+
+private data class ScoreArgumentResolution(
+    val title: String,
+    val details: String,
 )
 
 private val commonViolations = listOf(
@@ -182,6 +198,7 @@ private fun CourtDetailScreen(
     var showViolationDialog by remember { mutableStateOf(false) }
     var showScoreDialog by remember { mutableStateOf(false) }
     var showTimerDialog by remember { mutableStateOf(false) }
+    var showArgumentDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -240,6 +257,7 @@ private fun CourtDetailScreen(
                         totalViolationCount = totalViolationCount(uiState.violationCountsByPlayer),
                         onOpenTimer = { showTimerDialog = true },
                         onOpenViolations = { showViolationDialog = true },
+                        onOpenArgumentSolver = { showArgumentDialog = true },
                         onOpenFinalScore = { showScoreDialog = true },
                         onUndoViolation = onUndoViolation,
                     )
@@ -273,6 +291,13 @@ private fun CourtDetailScreen(
             countsByPlayer = uiState.violationCountsByPlayer,
             onDismiss = { showViolationDialog = false },
             onApplyViolation = onApplyViolation,
+        )
+    }
+
+    if (showArgumentDialog && detail != null) {
+        ScoreArgumentSolverDialog(
+            detail = detail,
+            onDismiss = { showArgumentDialog = false },
         )
     }
 
@@ -422,6 +447,7 @@ private fun InProgressActions(
     totalViolationCount: Int,
     onOpenTimer: () -> Unit,
     onOpenViolations: () -> Unit,
+    onOpenArgumentSolver: () -> Unit,
     onOpenFinalScore: () -> Unit,
     onUndoViolation: () -> Unit,
 ) {
@@ -447,6 +473,9 @@ private fun InProgressActions(
             FilledTonalIconButton(onClick = onOpenViolations, modifier = Modifier.size(34.dp)) {
                 Icon(Icons.Outlined.WarningAmber, contentDescription = "Violations")
             }
+        }
+        TextButton(onClick = onOpenArgumentSolver) {
+            Text("Solve")
         }
         FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
@@ -630,6 +659,103 @@ private fun ViolationDialog(
             },
         )
     }
+}
+
+@Composable
+private fun ScoreArgumentSolverDialog(
+    detail: CourtDetail,
+    onDismiss: () -> Unit,
+) {
+    var leftClaim by remember { mutableStateOf("") }
+    var rightClaim by remember { mutableStateOf("") }
+    var currentServerSide by remember { mutableStateOf<ResolverSide?>(null) }
+    var resolution by remember { mutableStateOf<ScoreArgumentResolution?>(null) }
+
+    val initialServerSide = initialServerSide(detail)
+    val leftName = sidePrimaryLabel(detail.leftSide)
+    val rightName = sidePrimaryLabel(detail.rightSide)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Solve Argument") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Enter each player's claimed game score (from their own perspective).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextField(
+                    value = leftClaim,
+                    onValueChange = { leftClaim = sanitizeScoreClaim(it) },
+                    label = { Text("$leftName says") },
+                    placeholder = { Text("4:3") },
+                    singleLine = true,
+                )
+                TextField(
+                    value = rightClaim,
+                    onValueChange = { rightClaim = sanitizeScoreClaim(it) },
+                    label = { Text("$rightName says") },
+                    placeholder = { Text("3:4") },
+                    singleLine = true,
+                )
+                Text("Who serves now?", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { currentServerSide = ResolverSide.LEFT },
+                        colors = if (currentServerSide == ResolverSide.LEFT) {
+                            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(leftName, textAlign = TextAlign.Center)
+                    }
+                    OutlinedButton(
+                        onClick = { currentServerSide = ResolverSide.RIGHT },
+                        colors = if (currentServerSide == ResolverSide.RIGHT) {
+                            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(rightName, textAlign = TextAlign.Center)
+                    }
+                }
+                resolution?.let { result ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(result.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(result.details, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    resolution = resolveScoreArgument(
+                        leftClaim = leftClaim,
+                        rightClaim = rightClaim,
+                        initialServer = initialServerSide,
+                        currentServer = currentServerSide,
+                        leftName = leftName,
+                        rightName = rightName,
+                    )
+                },
+            ) {
+                Text("Solve")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
 
 @Composable
@@ -1151,6 +1277,113 @@ private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
         "DEFAULT" -> if (score.isBlank()) "DEF" else "$score DEF"
         else -> score.ifBlank { null }
     }
+}
+
+private fun sanitizeScoreClaim(raw: String): String {
+    val digits = raw.filter { it.isDigit() || it == ':' }
+    if (digits.count { it == ':' } <= 1) return digits.take(5)
+    val firstColon = digits.indexOf(':')
+    val compact = digits.filter { it.isDigit() }
+    if (compact.length < 2) return compact
+    val left = compact.take(firstColon.coerceAtLeast(1)).take(2)
+    val right = compact.drop(left.length).take(2)
+    return if (right.isEmpty()) left else "$left:$right"
+}
+
+private fun initialServerSide(detail: CourtDetail): ResolverSide? {
+    val serverId = detail.initialServerPlayerId ?: return null
+    val leftHas = detail.leftSide?.players.orEmpty().any { it.playerId == serverId }
+    val rightHas = detail.rightSide?.players.orEmpty().any { it.playerId == serverId }
+    return when {
+        leftHas -> ResolverSide.LEFT
+        rightHas -> ResolverSide.RIGHT
+        else -> null
+    }
+}
+
+private fun parseScoreClaim(value: String): Pair<Int, Int>? {
+    val match = Regex("^\\s*(\\d{1,2})\\s*[:\\-]\\s*(\\d{1,2})\\s*$").matchEntire(value) ?: return null
+    val left = match.groupValues[1].toIntOrNull() ?: return null
+    val right = match.groupValues[2].toIntOrNull() ?: return null
+    return left to right
+}
+
+private fun resolveScoreArgument(
+    leftClaim: String,
+    rightClaim: String,
+    initialServer: ResolverSide?,
+    currentServer: ResolverSide?,
+    leftName: String,
+    rightName: String,
+): ScoreArgumentResolution {
+    val leftParsed = parseScoreClaim(leftClaim)
+        ?: return ScoreArgumentResolution("Need score", "Enter $leftName claim as games, e.g. 4:3.")
+    val rightParsed = parseScoreClaim(rightClaim)
+        ?: return ScoreArgumentResolution("Need score", "Enter $rightName claim as games, e.g. 3:4.")
+    if (initialServer == null || currentServer == null) {
+        return ScoreArgumentResolution(
+            "Need server info",
+            "Set both initial server and current server side to solve this automatically.",
+        )
+    }
+
+    val leftCandidate = ScoreCandidate(
+        leftGames = leftParsed.first,
+        rightGames = leftParsed.second,
+    )
+    val rightCandidate = ScoreCandidate(
+        leftGames = rightParsed.second,
+        rightGames = rightParsed.first,
+    )
+
+    val leftValid = candidateMatchesServer(leftCandidate, initialServer, currentServer)
+    val rightValid = candidateMatchesServer(rightCandidate, initialServer, currentServer)
+    val sameScore = leftCandidate.leftGames == rightCandidate.leftGames &&
+        leftCandidate.rightGames == rightCandidate.rightGames
+
+    return when {
+        sameScore && (leftValid || rightValid) -> ScoreArgumentResolution(
+            title = "Both can be right",
+            details = "Score ${leftCandidate.leftGames}:${leftCandidate.rightGames} fits the serving order.",
+        )
+
+        leftValid && !rightValid -> ScoreArgumentResolution(
+            title = "$leftName is right",
+            details = "Use score ${leftCandidate.leftGames}:${leftCandidate.rightGames}.",
+        )
+
+        rightValid && !leftValid -> ScoreArgumentResolution(
+            title = "$rightName is right",
+            details = "Use score ${rightCandidate.leftGames}:${rightCandidate.rightGames}.",
+        )
+
+        leftValid && rightValid -> ScoreArgumentResolution(
+            title = "Both are possible",
+            details = "Both claims fit serving order. Referee should decide.",
+        )
+
+        else -> ScoreArgumentResolution(
+            title = "Cannot solve automatically",
+            details = "Neither claim matches serving order. Referee should decide.",
+        )
+    }
+}
+
+private fun candidateMatchesServer(
+    candidate: ScoreCandidate,
+    initialServer: ResolverSide,
+    currentServer: ResolverSide,
+): Boolean {
+    if (candidate.leftGames < 0 || candidate.rightGames < 0) return false
+    val totalGames = candidate.leftGames + candidate.rightGames
+    val expected = if (totalGames % 2 == 0) {
+        initialServer
+    } else if (initialServer == ResolverSide.LEFT) {
+        ResolverSide.RIGHT
+    } else {
+        ResolverSide.LEFT
+    }
+    return expected == currentServer
 }
 
 private fun sanitizeScoreCell(raw: String, maxDigits: Int): String {

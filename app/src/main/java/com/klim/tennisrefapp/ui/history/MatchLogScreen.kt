@@ -97,7 +97,7 @@ private fun MatchLogScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = eventTitle(event.kind),
+                            text = eventTitle(event.kind, event.message),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -123,12 +123,22 @@ private fun formatTime(timestamp: Long): String {
     return formatter.format(Date(timestamp))
 }
 
-private fun eventTitle(kind: MatchEventKind): String {
+private fun eventTitle(kind: MatchEventKind, message: String?): String {
     return when (kind) {
         MatchEventKind.MATCH_STARTED -> "Match Started"
         MatchEventKind.MATCH_ENDED -> "Match Ended"
         MatchEventKind.VIOLATION -> "Violation"
-        MatchEventKind.TIMER -> "Timer"
+        MatchEventKind.TIMER -> {
+            if (message == null) return "Timer"
+            val parts = message.split("|")
+            val timerType = parts.getOrNull(1)?.uppercase().orEmpty()
+            val action = parts.getOrNull(2)?.uppercase().orEmpty()
+            when {
+                timerType == "WARMUP" && action == "START" -> "Warm-up Started"
+                timerType == "WARMUP" && action == "DONE" -> "Warm-up Ended"
+                else -> "Timer"
+            }
+        }
     }
 }
 
