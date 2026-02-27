@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,8 +32,8 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        notificationPrompt = if (granted) NotificationPrompt.NONE else nextNotificationPrompt()
+    ) { _ ->
+        notificationPrompt = nextNotificationPrompt()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
                     onRequest = { launchNotificationPermissionRequest() },
                     onOpenSettings = { openAppNotificationSettings() },
                     onOpenExactAlarmSettings = { openExactAlarmSettings() },
+                    onOpenBatteryOptimizationSettings = { openBatteryOptimizationSettings() },
                     onDismiss = { notificationPrompt = NotificationPrompt.NONE },
                 )
             }
@@ -64,28 +66,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!isNotificationGranted()) {
-            notificationPrompt = nextNotificationPrompt()
-        } else if (needsExactAlarmPermissionPrompt()) {
-            notificationPrompt = NotificationPrompt.EXACT_ALARM
-        } else {
-            notificationPrompt = NotificationPrompt.NONE
-        }
+        notificationPrompt = nextNotificationPrompt()
     }
 
     private fun requestNotificationsIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            if (!isNotificationGranted()) {
-                notificationPrompt = NotificationPrompt.SETTINGS
-            } else if (needsExactAlarmPermissionPrompt()) {
-                notificationPrompt = NotificationPrompt.EXACT_ALARM
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !isNotificationGranted()
+        ) {
+            if (!wasNotificationPermissionRequested()) {
+                launchNotificationPermissionRequest()
+                return
             }
-            return
-        }
-        if (isNotificationGranted()) return
-        if (!wasNotificationPermissionRequested()) {
-            launchNotificationPermissionRequest()
-            return
         }
         notificationPrompt = nextNotificationPrompt()
     }
@@ -99,13 +90,16 @@ class MainActivity : ComponentActivity() {
         if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
             return NotificationPrompt.SETTINGS
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return NotificationPrompt.NONE
-        if (isNotificationGranted()) return NotificationPrompt.NONE
-        return if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
-            NotificationPrompt.REQUEST
-        } else {
-            NotificationPrompt.SETTINGS
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isNotificationGranted()) {
+            return if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                NotificationPrompt.REQUEST
+            } else {
+                NotificationPrompt.SETTINGS
+            }
         }
+        if (needsExactAlarmPermissionPrompt()) return NotificationPrompt.EXACT_ALARM
+        if (needsBatteryOptimizationPrompt()) return NotificationPrompt.BATTERY_OPTIMIZATION
+        return NotificationPrompt.NONE
     }
 
     private fun isNotificationGranted(): Boolean {
@@ -165,10 +159,35 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun openBatteryOptimizationSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            val opened = runCatching {
+                startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (opened) return
+        }
+        startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null),
+            ),
+        )
+    }
+
     private fun needsExactAlarmPermissionPrompt(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
         val alarmManager = getSystemService(AlarmManager::class.java) ?: return false
         return !alarmManager.canScheduleExactAlarms()
+    }
+
+    private fun needsBatteryOptimizationPrompt(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        val powerManager = getSystemService(PowerManager::class.java) ?: return false
+        return !powerManager.isIgnoringBatteryOptimizations(packageName)
     }
 
     private fun extractCourtId(intent: Intent?): Long? {
@@ -190,6 +209,7 @@ private enum class NotificationPrompt {
     REQUEST,
     SETTINGS,
     EXACT_ALARM,
+    BATTERY_OPTIMIZATION,
 }
 
 @androidx.compose.runtime.Composable
@@ -198,6 +218,7 @@ private fun NotificationPermissionDialog(
     onRequest: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenExactAlarmSettings: () -> Unit,
+    onOpenBatteryOptimizationSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (prompt) {
@@ -243,6 +264,23 @@ private fun NotificationPermissionDialog(
                 text = { Text("Enable exact alarms so court timer notifications and vibration trigger on time.") },
                 confirmButton = {
                     Button(onClick = onOpenExactAlarmSettings) {
+                        Text("Open Settings")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("Later")
+                    }
+                },
+            )
+        }
+        NotificationPrompt.BATTERY_OPTIMIZATION -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("Allow Unrestricted Battery") },
+                text = { Text("Allow unrestricted battery usage so timer alerts trigger while the phone is locked or in the background.") },
+                confirmButton = {
+                    Button(onClick = onOpenBatteryOptimizationSettings) {
                         Text("Open Settings")
                     }
                 },

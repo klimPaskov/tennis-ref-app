@@ -7,7 +7,8 @@ Keep referee timers reliable when navigating away from a court or when the app i
 - Starting a timer:
   - stores timer state in local shared preferences,
   - starts in-app countdown updates for current UI,
-  - schedules a `WorkManager` one-time job for timer completion.
+  - schedules a `WorkManager` one-time job for timer completion,
+  - schedules `AlarmManager` warning/finish alarms for screen-off reliability.
 - Stopping/restarting a timer:
   - cancels the scheduled completion job,
   - removes persisted timer state,
@@ -29,3 +30,5 @@ Keep referee timers reliable when navigating away from a court or when the app i
 ## Notes
 - Warm-up timer uses a stronger vibration pattern.
 - Android 13+ notification permission is requested from `MainActivity`.
+- Android 12+ exact alarm permission is requested for precise background alarms.
+- Android 6+ battery optimization exception is requested to reduce delayed alerts when device is idle.

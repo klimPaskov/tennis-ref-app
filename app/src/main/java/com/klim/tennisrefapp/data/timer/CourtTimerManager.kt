@@ -200,22 +200,11 @@ class CourtTimerManager @Inject constructor(
             updateCurrent = true,
             warning = false,
         ) ?: return
-        runCatching {
-            when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms() ->
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-                else ->
-                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            }
-        }.getOrElse {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            } else {
-                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            }
-        }
+        scheduleAlarmWithFallback(
+            alarmManager = alarmManager,
+            triggerAtMillis = triggerAtMillis,
+            pendingIntent = pendingIntent,
+        )
     }
 
     private fun scheduleWarningAlarm(timer: PersistedCourtTimer) {
@@ -233,20 +222,39 @@ class CourtTimerManager @Inject constructor(
             updateCurrent = true,
             warning = true,
         ) ?: return
+        scheduleAlarmWithFallback(
+            alarmManager = alarmManager,
+            triggerAtMillis = warningAtMillis,
+            pendingIntent = pendingIntent,
+        )
+    }
+
+    private fun scheduleAlarmWithFallback(
+        alarmManager: AlarmManager,
+        triggerAtMillis: Long,
+        pendingIntent: PendingIntent,
+    ) {
         runCatching {
             when {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms() ->
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
-                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent,
+                    )
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP ->
+                    alarmManager.setAlarmClock(
+                        AlarmManager.AlarmClockInfo(triggerAtMillis, pendingIntent),
+                        pendingIntent,
+                    )
                 else ->
-                    alarmManager.set(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             }
         }.getOrElse {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             } else {
-                alarmManager.set(AlarmManager.RTC_WAKEUP, warningAtMillis, pendingIntent)
+                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
             }
         }
     }
