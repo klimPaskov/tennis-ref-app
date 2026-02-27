@@ -1,6 +1,7 @@
 package com.klim.tennisrefapp.data.repository
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.room.withTransaction
 import com.klim.tennisrefapp.data.local.AppDatabase
@@ -75,6 +76,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.rendering.PDFRenderer
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -86,6 +88,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -1545,10 +1548,24 @@ class AppRepository @Inject constructor(
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .toList()
-        if (lines.isEmpty()) return null
+        parseOrderOfPlayFromTextLines(lines)?.let { return it }
+        if (isPdfFile(uri, mimeType)) {
+            parseOrderOfPlayFromPdfByOcr(uri)?.let { return it }
+        }
+        return null
+    }
 
+    private fun parseOrderOfPlayFromTextLines(
+        lines: List<String>,
+        fallbackCourts: List<String>? = null,
+    ): ImportedOrderDocument? {
+        if (lines.isEmpty()) return null
         val courts = extractCourtNames(lines)
-        val courtNames = if (courts.isNotEmpty()) courts else listOf("Court 1")
+        val courtNames = when {
+            courts.isNotEmpty() -> courts
+            !fallbackCourts.isNullOrEmpty() -> fallbackCourts
+            else -> listOf("Court 1")
+        }
         val parsedMatches = extractMatchPairs(lines)
         if (parsedMatches.isEmpty()) return null
 
@@ -1610,6 +1627,67 @@ class AppRepository @Inject constructor(
 
     private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
         val recognized = recognizeImageText(uri) ?: return null
+        return parseOrderOfPlayFromRecognizedTable(recognized)
+    }
+
+    private suspend fun parseOrderOfPlayFromPdfByOcr(uri: Uri): ImportedOrderDocument? = withContext(Dispatchers.IO) {
+        runCatching {
+            PDFBoxResourceLoader.init(appContext)
+            val resolver = appContext.contentResolver
+            resolver.openInputStream(uri)?.use { stream ->
+                PDDocument.load(stream).use { document ->
+                    val pageCount = document.numberOfPages
+                    if (pageCount <= 0) {
+                        null
+                    } else {
+                        val renderer = PDFRenderer(document)
+                        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                        try {
+                            val candidates = mutableListOf<ImportedOrderDocument>()
+                            for (pageIndex in 0 until minOf(pageCount, PDF_OCR_MAX_PAGES)) {
+                                val rendered = renderer.renderImage(pageIndex, PDF_OCR_RENDER_SCALE)
+                                val pageBitmap = scaleBitmapIfNeeded(rendered, PDF_OCR_MAX_DIMENSION)
+                                if (pageBitmap !== rendered && !rendered.isRecycled) {
+                                    rendered.recycle()
+                                }
+                                try {
+                                    val recognized = Tasks.await(recognizer.process(InputImage.fromBitmap(pageBitmap, 0)))
+                                    parseOrderOfPlayFromRecognizedTable(recognized)?.let { candidates += it }
+                                    if (candidates.isEmpty()) {
+                                        val lines = recognized.text
+                                            .replace('\u000C', '\n')
+                                            .lineSequence()
+                                            .map { it.trim() }
+                                            .filter { it.isNotBlank() }
+                                            .toList()
+                                        parseOrderOfPlayFromTextLines(lines)?.let { candidates += it }
+                                    }
+                                } finally {
+                                    if (!pageBitmap.isRecycled) {
+                                        pageBitmap.recycle()
+                                    }
+                                }
+                            }
+                            candidates.maxByOrNull { it.matches.size * 100 + it.courts.size }
+                        } finally {
+                            recognizer.close()
+                        }
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun scaleBitmapIfNeeded(bitmap: Bitmap, maxDimension: Int): Bitmap {
+        val largest = maxOf(bitmap.width, bitmap.height)
+        if (largest <= maxDimension) return bitmap
+        val scale = maxDimension.toFloat() / largest.toFloat()
+        val width = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, width, height, true)
+    }
+
+    private fun parseOrderOfPlayFromRecognizedTable(recognized: Text): ImportedOrderDocument? {
         val ocrLines = extractOcrLines(recognized)
         if (ocrLines.isEmpty()) return null
 
@@ -2934,6 +3012,9 @@ class AppRepository @Inject constructor(
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
         const val ROW_RECOVERY_MARGIN = 14f
+        const val PDF_OCR_MAX_PAGES = 2
+        const val PDF_OCR_RENDER_SCALE = 2.3f
+        const val PDF_OCR_MAX_DIMENSION = 3200
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
