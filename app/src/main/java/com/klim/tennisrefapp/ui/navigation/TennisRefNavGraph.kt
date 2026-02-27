@@ -14,6 +14,7 @@ import com.klim.tennisrefapp.ui.history.MatchLogRoute
 import com.klim.tennisrefapp.ui.home.HomeRoute
 import com.klim.tennisrefapp.ui.players.PlayerDetailRoute
 import com.klim.tennisrefapp.ui.players.PlayersRoute
+import com.klim.tennisrefapp.ui.settings.SettingsRoute
 
 private const val HOME_ROUTE = "home"
 private const val COURTS_ROUTE = "courts"
@@ -22,6 +23,7 @@ private const val HISTORY_ROUTE = "history"
 private const val MATCH_LOG_ROUTE = "matchLog"
 private const val PLAYERS_ROUTE = "players"
 private const val PLAYER_DETAIL_ROUTE = "player"
+private const val SETTINGS_ROUTE = "settings"
 private const val ARG_COURT_ID = "courtId"
 private const val ARG_MATCH_ID = "matchId"
 private const val ARG_PLAYER_ID = "playerId"
@@ -49,6 +51,7 @@ fun TennisRefNavGraph(
                 onContinue = { navController.navigate(COURTS_ROUTE) },
                 onPlayers = { navController.navigate(PLAYERS_ROUTE) },
                 onHistory = { navController.navigate(HISTORY_ROUTE) },
+                onSettings = { navController.navigate(SETTINGS_ROUTE) },
             )
         }
         composable(route = COURTS_ROUTE) {
@@ -95,6 +98,9 @@ fun TennisRefNavGraph(
             arguments = listOf(navArgument(ARG_PLAYER_ID) { type = NavType.LongType }),
         ) {
             PlayerDetailRoute(onBack = { navController.popBackStack() })
+        }
+        composable(route = SETTINGS_ROUTE) {
+            SettingsRoute(onBack = { navController.popBackStack() })
         }
     }
 }

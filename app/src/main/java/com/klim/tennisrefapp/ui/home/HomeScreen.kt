@@ -38,6 +38,7 @@ fun HomeRoute(
     onContinue: () -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
+    onSettings: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -73,6 +74,7 @@ fun HomeRoute(
         onLoadPreloaded = viewModel::onLoadPreloadedOrderOfPlay,
         onPlayers = onPlayers,
         onHistory = onHistory,
+        onSettings = onSettings,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -87,6 +89,7 @@ private fun HomeScreen(
     onLoadPreloaded: (String) -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
+    onSettings: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     var showPreloadedDialog by remember { mutableStateOf(false) }
@@ -113,6 +116,9 @@ private fun HomeScreen(
             }
             Button(onClick = onHistory, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("History")
+            }
+            Button(onClick = onSettings, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                Text("Settings")
             }
             Button(
                 onClick = onNewOrderOfPlay,
