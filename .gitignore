@@ -19,5 +19,7 @@ Thumbs.db
 /tools/
 /.mcp_home/
 /.artifacts/
+.agents/
+*.Zone.Identifier
 AGENTS.md
 SPEC.md
