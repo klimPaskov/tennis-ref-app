@@ -1774,6 +1774,7 @@ class AppRepository @Inject constructor(
                 }
                 .sortedBy { it.top }
             val linesByColumn = groupRowLinesByColumn(rowLines, columns)
+            val rowSchedule = parseScheduleContextFromRow(rowLines)
             val rowPairs = mutableListOf<Pair<ImportedOrderMatch, ScheduleContext>>()
             columns.forEach columnLoop@ { column ->
                 val cellLines = linesByColumn[column.name].orEmpty().sortedBy { it.top }
@@ -1799,6 +1800,11 @@ class AppRepository @Inject constructor(
                 .groupingBy { schedule -> schedule.label to schedule.manualNotBefore }
                 .eachCount()
             val rowFallback = explicitByKey.maxByOrNull { it.value }?.key
+                ?: if (rowSchedule.explicitKeyword || rowSchedule.manualNotBefore != null) {
+                    rowSchedule.label to rowSchedule.manualNotBefore
+                } else {
+                    null
+                }
             rowPairs.forEach { (match, schedule) ->
                 if (!schedule.explicitKeyword && rowFallback != null) {
                     matches += match.copy(
@@ -2267,10 +2273,14 @@ class AppRepository @Inject constructor(
             candidates += segment
         }
 
-        if (cleaned.size > 4) {
+        if (cleaned.size >= 4) {
             for (windowSize in 2..4) {
                 if (cleaned.size >= windowSize) {
+                    candidates += cleaned.take(windowSize)
                     candidates += cleaned.takeLast(windowSize)
+                    for (start in 0..(cleaned.size - windowSize)) {
+                        candidates += cleaned.subList(start, start + windowSize)
+                    }
                 }
             }
         }
@@ -2392,6 +2402,20 @@ class AppRepository @Inject constructor(
         if (parsedHeader.explicitKeyword) return parsedHeader
         val fullJoined = sorted.joinToString(" ") { it.text }
         return parseScheduleContextFromText(fullJoined)
+    }
+
+    private fun parseScheduleContextFromRow(rowLines: List<OcrLine>): ScheduleContext {
+        if (rowLines.isEmpty()) return ScheduleContext(label = "Followed By", manualNotBefore = null, explicitKeyword = false)
+        val sorted = rowLines.sortedBy { it.top }
+        val scheduleLikeLines = sorted.filter { line ->
+            containsScheduleKeyword(line.text) || extractTime(line.text) != null
+        }
+        val joined = if (scheduleLikeLines.isEmpty()) {
+            sorted.joinToString(" ") { it.text }
+        } else {
+            scheduleLikeLines.joinToString(" ") { it.text }
+        }
+        return parseScheduleContextFromText(joined)
     }
 
     private fun parseScheduleContextFromText(raw: String): ScheduleContext {
@@ -2558,13 +2582,23 @@ class AppRepository @Inject constructor(
     private fun scheduleKeywordLabel(value: String): String? {
         val compact = value
             .lowercase()
+            .replace('|', 'l')
+            .replace('0', 'o')
+            .replace('1', 'l')
+            .replace('5', 's')
+            .replace('$', 's')
             .replace(Regex("[^a-z0-9]"), "")
         return when {
             compact.contains("notbefore") ||
                 compact.contains("notbefor") ||
-                compact.contains("notbefo") -> "Not Before"
+                compact.contains("notbefo") ||
+                compact.contains("notbeforc") ||
+                compact.contains("notbcfore") -> "Not Before"
             compact.contains("startingat") || compact.contains("starting") -> "Starting at"
-            compact.contains("followedby") || compact.contains("followed") -> "Followed By"
+            compact.contains("followedby") ||
+                compact.contains("folowedby") ||
+                compact.contains("followed") ||
+                compact.contains("folowed") -> "Followed By"
             else -> null
         }
     }
@@ -2632,19 +2666,16 @@ class AppRepository @Inject constructor(
             .forEach { candidate ->
                 decodeSeedToken(candidate, countryCode)?.let { return it }
             }
-
-        val tokens = Regex("[A-Za-z0-9|\\[\\]]+")
-            .findAll(raw.uppercase())
-            .map { it.value }
-            .toList()
-            .asReversed()
-        return tokens.firstNotNullOfOrNull { token ->
-            if (token.any { it.isDigit() } || token.contains('[') || token.contains(']') || token.contains('|')) {
-                decodeSeedToken(token, countryCode)
-            } else {
-                null
+        Regex("\\(\\s*([A-Za-z0-9|]{1,4})\\s*\\)").findAll(raw)
+            .mapNotNull { it.groupValues.getOrNull(1) }
+            .forEach { candidate ->
+                val normalizedCountry = normalizeCountryCodeToken(candidate, allowFuzzy = false)
+                if (normalizedCountry != null) {
+                    return@forEach
+                }
+                decodeSeedToken(candidate, countryCode)?.let { return it }
             }
-        }
+        return null
     }
 
     private fun decodeSeedToken(token: String, countryCode: String?): Int? {
@@ -3100,7 +3131,36 @@ class AppRepository @Inject constructor(
     }
 
     private fun extractTime(value: String): String? {
-        return Regex("(\\d{1,2}:\\d{2})").find(value)?.groupValues?.getOrNull(1)
+        val normalized = normalizeOcrTimeText(value)
+        Regex("\\b([0-2]?\\d)\\s*[:.]\\s*([0-5]\\d)\\b")
+            .find(normalized)
+            ?.let { match ->
+                val hour = match.groupValues[1].toIntOrNull() ?: return@let
+                val minute = match.groupValues[2].toIntOrNull() ?: return@let
+                if (hour in 0..23 && minute in 0..59) {
+                    return "%02d:%02d".format(hour, minute)
+                }
+            }
+        Regex("\\b([0-2]\\d)([0-5]\\d)\\b")
+            .find(normalized)
+            ?.let { match ->
+                val hour = match.groupValues[1].toIntOrNull() ?: return@let
+                val minute = match.groupValues[2].toIntOrNull() ?: return@let
+                if (hour in 0..23 && minute in 0..59) {
+                    return "%02d:%02d".format(hour, minute)
+                }
+            }
+        return null
+    }
+
+    private fun normalizeOcrTimeText(value: String): String {
+        return value
+            .replace('O', '0')
+            .replace('o', '0')
+            .replace('|', '1')
+            .replace('I', '1')
+            .replace('l', '1')
+            .replace(Regex("\\s+"), " ")
     }
 
     private fun toTodayMillis(timeLabel: String): Long? {
