@@ -9,6 +9,8 @@
 - Home screen `New Order Of Play` opens Android file picker.
 - Selected file URI is passed to repository import.
 - Existing local data is cleared, then tournament/courts/players/matches are rebuilt from parsed content.
+- On successful import, that source URI is stored as the active reload source.
+- Home screen `Reload` uses the stored source and rebuilds the same order-of-play with all matches reset to scheduled.
 
 ## Parsing Strategy
 - Detect court columns from `Court X` labels.

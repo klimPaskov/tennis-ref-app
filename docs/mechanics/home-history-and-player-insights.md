@@ -5,6 +5,8 @@
 - Actions:
   - `Courts`: opens courts.
   - `New Order Of Play`: opens file picker and imports order-of-play data from file.
+  - `Load Preloaded Order Of Play`: opens a chooser dialog for available preloaded files (currently `Example`).
+  - `Reload`: asks for confirmation, then reloads the currently loaded order source from scratch (clears all match progress).
   - `Players`: opens player list.
   - `History`: opens completed-match history grouped by court.
 
@@ -18,6 +20,7 @@
 ## Player Insights
 - `Players` list shows:
   - player name + nationality flag,
+  - search field to filter by player name,
   - completed match count,
   - next match summary (court + time if known).
 - `Player Detail` shows:
