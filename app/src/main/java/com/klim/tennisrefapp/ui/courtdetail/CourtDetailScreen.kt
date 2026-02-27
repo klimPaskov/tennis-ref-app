@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,12 +25,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -476,7 +477,7 @@ private fun InProgressActions(
             }
         }
         FilledTonalIconButton(onClick = onOpenArgumentSolver, modifier = Modifier.size(34.dp)) {
-            Icon(Icons.Outlined.HelpOutline, contentDescription = "Solve argument")
+            Icon(Icons.AutoMirrored.Outlined.HelpOutline, contentDescription = "Solve argument")
         }
         FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
@@ -667,8 +668,10 @@ private fun ScoreArgumentSolverDialog(
     detail: CourtDetail,
     onDismiss: () -> Unit,
 ) {
-    var leftClaim by remember { mutableStateOf("") }
-    var rightClaim by remember { mutableStateOf("") }
+    var leftOwnGames by remember { mutableStateOf("") }
+    var leftOpponentGames by remember { mutableStateOf("") }
+    var rightOwnGames by remember { mutableStateOf("") }
+    var rightOpponentGames by remember { mutableStateOf("") }
     var currentServerSide by remember { mutableStateOf<ResolverSide?>(null) }
     var resolution by remember { mutableStateOf<ScoreArgumentResolution?>(null) }
 
@@ -682,25 +685,25 @@ private fun ScoreArgumentSolverDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Enter each player's claimed game score (from their own perspective).",
+                    text = "Enter each claim from that player's perspective: own games and opponent games.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                TextField(
-                    value = leftClaim,
-                    onValueChange = { leftClaim = formatScoreClaimInput(it) },
-                    label = { Text("$leftName says") },
-                    placeholder = { Text("4:3") },
-                    singleLine = true,
+                ArgumentScoreRow(
+                    label = "$leftName says",
+                    ownGames = leftOwnGames,
+                    opponentGames = leftOpponentGames,
+                    onOwnChange = { leftOwnGames = sanitizeScoreCell(it, maxDigits = 2) },
+                    onOpponentChange = { leftOpponentGames = sanitizeScoreCell(it, maxDigits = 2) },
                 )
-                TextField(
-                    value = rightClaim,
-                    onValueChange = { rightClaim = formatScoreClaimInput(it) },
-                    label = { Text("$rightName says") },
-                    placeholder = { Text("3:4") },
-                    singleLine = true,
+                ArgumentScoreRow(
+                    label = "$rightName says",
+                    ownGames = rightOwnGames,
+                    opponentGames = rightOpponentGames,
+                    onOwnChange = { rightOwnGames = sanitizeScoreCell(it, maxDigits = 2) },
+                    onOpponentChange = { rightOpponentGames = sanitizeScoreCell(it, maxDigits = 2) },
                 )
                 Text(
-                    text = "Tip: type 43 and it becomes 4:3 automatically.",
+                    text = "Example: if both type 4 and 3, each means 4:3 to themselves.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text("Who serves now?", style = MaterialTheme.typography.titleSmall)
@@ -745,8 +748,8 @@ private fun ScoreArgumentSolverDialog(
             Button(
                 onClick = {
                     resolution = resolveScoreArgument(
-                        leftClaim = leftClaim,
-                        rightClaim = rightClaim,
+                        leftClaim = "$leftOwnGames:$leftOpponentGames",
+                        rightClaim = "$rightOwnGames:$rightOpponentGames",
                         initialServer = initialServerSide,
                         currentServer = currentServerSide,
                         leftName = leftName,
@@ -761,6 +764,80 @@ private fun ScoreArgumentSolverDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+}
+
+@Composable
+private fun ArgumentScoreRow(
+    label: String,
+    ownGames: String,
+    opponentGames: String,
+    onOwnChange: (String) -> Unit,
+    onOpponentChange: (String) -> Unit,
+) {
+    val focusManager = LocalFocusManager.current
+    Text(
+        text = label,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Own",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(36.dp),
+        )
+        TextField(
+            value = ownGames,
+            onValueChange = { raw ->
+                val sanitized = sanitizeScoreCell(raw, maxDigits = 2)
+                onOwnChange(sanitized)
+                if (ownGames.isEmpty() && sanitized.length == 1) {
+                    focusManager.moveFocus(FocusDirection.Next)
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.width(68.dp),
+            textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Next,
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Next) },
+            ),
+        )
+        Text(":", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        TextField(
+            value = opponentGames,
+            onValueChange = { raw ->
+                val sanitized = sanitizeScoreCell(raw, maxDigits = 2)
+                onOpponentChange(sanitized)
+                if (opponentGames.isEmpty() && sanitized.length == 1) {
+                    focusManager.moveFocus(FocusDirection.Next)
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.width(68.dp),
+            textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Next,
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Next) },
+            ),
+        )
+        Text(
+            text = "Opp",
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(36.dp),
+            textAlign = TextAlign.End,
+        )
+    }
 }
 
 @Composable
@@ -1281,22 +1358,6 @@ private fun buildScoreLabel(scoreText: String?, resultType: String?): String? {
         "WALKOVER" -> if (score.isBlank()) "WO" else "$score WO"
         "DEFAULT" -> if (score.isBlank()) "DEF" else "$score DEF"
         else -> score.ifBlank { null }
-    }
-}
-
-private fun formatScoreClaimInput(raw: String): String {
-    val compact = raw.filter { it.isDigit() || it == ':' }
-    if (compact.contains(':')) {
-        val left = compact.substringBefore(':').filter { it.isDigit() }.take(2)
-        val right = compact.substringAfter(':').filter { it.isDigit() }.take(2)
-        return if (right.isBlank()) left else "$left:$right"
-    }
-    val digits = compact.filter { it.isDigit() }.take(4)
-    return when {
-        digits.length <= 1 -> digits
-        digits.length == 2 -> "${digits[0]}:${digits[1]}"
-        digits.length == 3 -> "${digits.take(2)}:${digits.drop(2)}"
-        else -> "${digits.take(2)}:${digits.drop(2)}"
     }
 }
 
