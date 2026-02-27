@@ -2188,6 +2188,14 @@ class AppRepository @Inject constructor(
         database.withTransaction {
             val matches = matchDao.getAll()
             val slots = slotDao.getAll()
+            val winnerTeamByMatchId = matches.associate { match -> match.id to match.winnerTeamId }
+            slots.forEach { slot ->
+                if (slot.slotType != SlotType.WINNER_OF_MATCH) return@forEach
+                val winnerTeamId = slot.winnerOfMatchId?.let { winnerTeamByMatchId[it] } ?: return@forEach
+                if (slot.directTeamId != winnerTeamId) {
+                    slotDao.update(slot.copy(directTeamId = winnerTeamId))
+                }
+            }
             val players = playerDao.getAll()
             val teamPlayers = teamPlayerDao.getAll()
             val tournament = tournamentDao.getFirst()
