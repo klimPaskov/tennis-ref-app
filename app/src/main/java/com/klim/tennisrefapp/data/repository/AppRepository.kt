@@ -318,8 +318,15 @@ class AppRepository @Inject constructor(
 
     override suspend fun reloadOrderOfPlayFromFile(uriString: String): Boolean {
         val imported = parseOrderOfPlayFromUri(uriString) ?: return false
-        if (imported.matches.isEmpty()) return false
+        return replaceTournamentWithImportedOrder(imported)
+    }
 
+    override suspend fun loadPreloadedOrderOfPlay(): Boolean {
+        return replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
+    }
+
+    private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
+        if (imported.matches.isEmpty()) return false
         withContext(Dispatchers.IO) {
             database.clearAllTables()
         }
@@ -434,6 +441,78 @@ class AppRepository @Inject constructor(
 
         recomputeNotBeforeAndSchedule()
         return true
+    }
+
+    private fun verifiedPreloadedOrderOfPlay(): ImportedOrderDocument {
+        fun entrant(name: String, country: String, seed: Int? = null): ParsedEntrant {
+            return ParsedEntrant(name = name, countryCode = country, seed = seed)
+        }
+        val start0900 = toTodayMillis("09:00")
+        val notBefore1130 = toTodayMillis("11:30")
+        fun schedule(order: Int): Pair<String, Long?> {
+            return when (order) {
+                1 -> "Starting at 09:00" to start0900
+                3 -> "Not Before 11:30" to notBefore1130
+                else -> "Followed By" to null
+            }
+        }
+        fun match(
+            court: String,
+            order: Int,
+            left: ParsedEntrant,
+            right: ParsedEntrant,
+        ): ImportedOrderMatch {
+            val (label, manual) = schedule(order)
+            return ImportedOrderMatch(
+                courtName = court,
+                order = order,
+                left = left,
+                right = right,
+                scheduleLabel = label,
+                manualNotBefore = manual,
+            )
+        }
+
+        val matches = listOf(
+            match("Court 2", 1, entrant("Yiyuan Su", "CHN"), entrant("Vincent Fletcher", "GBR", 5)),
+            match("Court 2", 2, entrant("Hanna Vanni", "FIN", 7), entrant("Vera Morozova", "EST")),
+            match("Court 2", 3, entrant("Elizabete Marta Hamitova", "LAT"), entrant("Margarita Novik", "EST")),
+            match("Court 2", 4, entrant("Filip Hesser", "SWE"), entrant("Andreas Kuum", "EST")),
+            match("Court 3", 1, entrant("Sonia Sirenius", "FIN"), entrant("Vladislava Lescinska", "LAT")),
+            match("Court 3", 2, entrant("Kamilla Cernousova", "LAT"), entrant("Marie Benmouyal", "DEN")),
+            match("Court 3", 3, entrant("Mark Griaziutin Tverskoj", "LTU"), entrant("Alex Tuomolin", "FIN")),
+            match("Court 3", 4, entrant("Gabriel Maciel Araujo Pyndt", "DEN"), entrant("Nick Mertgens", "GER")),
+            match("Court 4", 1, entrant("Elizaveta Anikina", "EST", 1), entrant("Sofia Ioana Voicu", "BEL")),
+            match("Court 4", 2, entrant("Nikita Smirnov", "EST"), entrant("Moritz Glauser", "LIE", 4)),
+            match("Court 4", 3, entrant("Julia Kolodziejska", "POL"), entrant("Viktoria Sidorenkova", "EST")),
+            match("Court 4", 4, entrant("Daria Podlipskaya", "EST"), entrant("Elin Kalmus", "EST")),
+            match("Court 5", 1, entrant("Sonja Wedenski", "SWE"), entrant("Varvara Trifonova", "EST")),
+            match("Court 5", 2, entrant("Svit Suljic", "SLO"), entrant("Ken Ink", "EST")),
+            match("Court 5", 3, entrant("Liisa Marii Pohjala", "EST"), entrant("Grace Bernstein", "SWE")),
+            match("Court 5", 4, entrant("Luukas Raudkivi", "EST"), entrant("Jan Werblinski", "POL")),
+            match("Court 6", 1, entrant("Asia Basiletti", "ITA"), entrant("Aleksandra Maksimova", "EST")),
+            match("Court 6", 2, entrant("Margarita Aktuganova", "ISR"), entrant("Ksenia Semjonova", "EST")),
+            match("Court 6", 3, entrant("Vlad Secara", "ROU"), entrant("Rasmus Stalmeister", "EST")),
+            match("Court 6", 4, entrant("Nand Vandepoele", "BEL"), entrant("Egert Trave", "EST")),
+            match("Court 7", 1, entrant("Edwin Averjanov", "EST"), entrant("Jan Sykora", "CZE")),
+            match("Court 7", 2, entrant("Eriks Valeinis", "LAT"), entrant("Mads Bruhn Aaby", "DEN")),
+            match("Court 7", 3, entrant("Elizaveta Bryakina", "EST"), entrant("Luana Kappeler", "SUI")),
+            match("Court 7", 4, entrant("Kirils Sokolovs", "LAT"), entrant("Verneri Riikonen", "FIN")),
+            match("Court 8", 1, entrant("Markus Valtson", "EST"), entrant("Asger Sorensen", "DEN")),
+            match("Court 8", 2, entrant("Maryna Levadna", "UKR"), entrant("Marie Johanna Lapimaa", "EST")),
+            match("Court 8", 3, entrant("Ewangelina Penkevych", "POL"), entrant("Nora Olivia Adamson", "EST")),
+            match("Court 8", 4, entrant("Hitoshi Shirabe", "JPN"), entrant("Mark Gregor Toniste", "EST")),
+            match("Court 9", 1, entrant("Olivia Martins", "POL"), entrant("Karina Metsa", "EST")),
+            match("Court 9", 2, entrant("Mikko Aaltonen", "FIN"), entrant("Tobias Rehn", "SWE")),
+            match("Court 9", 3, entrant("Nina Berg", "SWE"), entrant("Kristina Saar", "EST")),
+            match("Court 9", 4, entrant("Oskar Lund", "SWE"), entrant("Marek Tamm", "EST")),
+        )
+
+        return ImportedOrderDocument(
+            tournamentName = "J60 Tallinn (Verified Preloaded)",
+            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
+            matches = matches,
+        )
     }
 
     override fun observePlayers(): Flow<List<PlayerSummary>> {
@@ -2131,11 +2210,11 @@ class AppRepository @Inject constructor(
                 rawSeed.isBlank() -> null
                 else -> decodeSeedToken(rawSeed, country) ?: rawSeed.toIntOrNull()?.takeIf { it in 1..32 }
             }
-            structuredNameTokenCandidates(baseTokens).forEach { candidateTokens ->
+            structuredNameTokenCandidates(baseTokens).forEach candidateLoop@ { candidateTokens ->
                 val cleanedTokens = cleanupNameTokens(candidateTokens)
-                if (cleanedTokens.isEmpty()) return@forEach
+                if (cleanedTokens.isEmpty()) return@candidateLoop
                 val name = normalizePersonNameCase(cleanedTokens.joinToString(" "))
-                if (name.isBlank()) return@forEach
+                if (name.isBlank()) return@candidateLoop
                 parsed += ParsedEntrant(name = name, countryCode = country, seed = seed)
             }
         }
