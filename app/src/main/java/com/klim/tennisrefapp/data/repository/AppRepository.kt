@@ -348,6 +348,7 @@ class AppRepository @Inject constructor(
     override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
         val loaded = when (preloadId.lowercase()) {
             "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
+            "28.02.2026" -> replaceTournamentWithImportedOrder(preloadedOrderOfPlay20260228())
             else -> false
         }
         if (loaded) {
@@ -358,6 +359,15 @@ class AppRepository @Inject constructor(
 
     private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
         if (imported.matches.isEmpty()) return false
+        val knownMatchRefs = imported.matches
+            .map { match -> ImportedMatchRef(courtName = match.courtName, order = match.order) }
+            .toSet()
+        val hasUnknownDependency = imported.matches.any { match ->
+            listOfNotNull(match.leftWinnerOf, match.rightWinnerOf).any { dependency ->
+                dependency !in knownMatchRefs
+            }
+        }
+        if (hasUnknownDependency) return false
         withContext(Dispatchers.IO) {
             database.clearAllTables()
         }
@@ -385,7 +395,7 @@ class AppRepository @Inject constructor(
             val courtIdByName = courtEntities.associate { it.name to it.id }
 
             val entrants = imported.matches
-                .flatMap { listOf(it.left, it.right) }
+                .flatMap { listOfNotNull(it.left, it.right) }
                 .fold(linkedMapOf<String, ParsedEntrant>()) { acc, entrant ->
                     val existing = acc[entrant.name]
                     acc[entrant.name] = mergeEntrant(existing, entrant)
@@ -478,16 +488,19 @@ class AppRepository @Inject constructor(
                 .toMap()
             val matchEntities = mutableListOf<MatchEntity>()
             val slotEntities = mutableListOf<SlotEntity>()
-            var matchId = 100L
-            imported.matches.forEach { importedMatch ->
-                val currentMatchId = matchId++
-                val leftTeamId = teamIdByEntrantName[importedMatch.left.name] ?: return@forEach
-                val rightTeamId = teamIdByEntrantName[importedMatch.right.name] ?: return@forEach
+            val matchIdByRef = linkedMapOf<ImportedMatchRef, Long>()
+            imported.matches.forEachIndexed { index, importedMatch ->
+                val currentMatchId = 100L + index
+                val matchRef = ImportedMatchRef(
+                    courtName = importedMatch.courtName,
+                    order = importedMatch.order,
+                )
+                matchIdByRef[matchRef] = currentMatchId
                 matchEntities += MatchEntity(
                     id = currentMatchId,
                     tournamentId = 1L,
                     courtId = courtIdByName[importedMatch.courtName],
-                    roundName = "${importedMatch.order}. ${importedMatch.scheduleLabel}",
+                    roundName = buildRoundLabel(importedMatch),
                     status = MatchStatus.SCHEDULED,
                     manualNotBefore = importedMatch.manualNotBefore,
                     computedNotBefore = null,
@@ -500,21 +513,29 @@ class AppRepository @Inject constructor(
                     resultType = null,
                     scoreText = null,
                 )
-                slotEntities += SlotEntity(
-                    id = currentMatchId * 10L + 1L,
+            }
+
+            imported.matches.forEachIndexed { index, importedMatch ->
+                val currentMatchId = 100L + index
+                slotEntities += buildImportedSlotEntity(
+                    slotId = currentMatchId * 10L + 1L,
                     matchId = currentMatchId,
                     position = SlotPosition.LEFT,
-                    slotType = SlotType.DIRECT_TEAM,
-                    directTeamId = leftTeamId,
-                    winnerOfMatchId = null,
+                    entrant = importedMatch.left,
+                    winnerOf = importedMatch.leftWinnerOf,
+                    isBye = importedMatch.leftIsBye,
+                    teamIdByEntrantName = teamIdByEntrantName,
+                    matchIdByRef = matchIdByRef,
                 )
-                slotEntities += SlotEntity(
-                    id = currentMatchId * 10L + 2L,
+                slotEntities += buildImportedSlotEntity(
+                    slotId = currentMatchId * 10L + 2L,
                     matchId = currentMatchId,
                     position = SlotPosition.RIGHT,
-                    slotType = SlotType.DIRECT_TEAM,
-                    directTeamId = rightTeamId,
-                    winnerOfMatchId = null,
+                    entrant = importedMatch.right,
+                    winnerOf = importedMatch.rightWinnerOf,
+                    isBye = importedMatch.rightIsBye,
+                    teamIdByEntrantName = teamIdByEntrantName,
+                    matchIdByRef = matchIdByRef,
                 )
             }
             matchDao.insertAll(matchEntities)
@@ -523,6 +544,60 @@ class AppRepository @Inject constructor(
 
         recomputeNotBeforeAndSchedule()
         return true
+    }
+
+    private fun buildRoundLabel(match: ImportedOrderMatch): String {
+        val suffix = match.eventCode?.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()
+        return "${match.order}. ${match.scheduleLabel}$suffix"
+    }
+
+    private fun buildImportedSlotEntity(
+        slotId: Long,
+        matchId: Long,
+        position: SlotPosition,
+        entrant: ParsedEntrant?,
+        winnerOf: ImportedMatchRef?,
+        isBye: Boolean,
+        teamIdByEntrantName: Map<String, Long>,
+        matchIdByRef: Map<ImportedMatchRef, Long>,
+    ): SlotEntity {
+        return when {
+            isBye -> SlotEntity(
+                id = slotId,
+                matchId = matchId,
+                position = position,
+                slotType = SlotType.BYE,
+                directTeamId = null,
+                winnerOfMatchId = null,
+            )
+
+            winnerOf != null -> SlotEntity(
+                id = slotId,
+                matchId = matchId,
+                position = position,
+                slotType = SlotType.WINNER_OF_MATCH,
+                directTeamId = null,
+                winnerOfMatchId = matchIdByRef[winnerOf],
+            )
+
+            entrant != null -> SlotEntity(
+                id = slotId,
+                matchId = matchId,
+                position = position,
+                slotType = SlotType.DIRECT_TEAM,
+                directTeamId = teamIdByEntrantName[entrant.name],
+                winnerOfMatchId = null,
+            )
+
+            else -> SlotEntity(
+                id = slotId,
+                matchId = matchId,
+                position = position,
+                slotType = SlotType.WINNER_OF_MATCH,
+                directTeamId = null,
+                winnerOfMatchId = null,
+            )
+        }
     }
 
     private fun loadReloadSource(): ReloadSource {
@@ -616,6 +691,189 @@ class AppRepository @Inject constructor(
 
         return ImportedOrderDocument(
             tournamentName = "J60 Tallinn (Verified Preloaded)",
+            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
+            matches = matches,
+        )
+    }
+
+    private fun preloadedOrderOfPlay20260228(): ImportedOrderDocument {
+        fun entrant(name: String, country: String, seed: Int? = null): ParsedEntrant {
+            return ParsedEntrant(name = name, countryCode = country, seed = seed)
+        }
+        fun ref(court: String, order: Int): ImportedMatchRef = ImportedMatchRef(courtName = court, order = order)
+        fun match(
+            court: String,
+            order: Int,
+            scheduleLabel: String,
+            manualNotBefore: Long?,
+            eventCode: String,
+            left: ParsedEntrant? = null,
+            right: ParsedEntrant? = null,
+            leftWinnerOf: ImportedMatchRef? = null,
+            rightWinnerOf: ImportedMatchRef? = null,
+        ): ImportedOrderMatch {
+            return ImportedOrderMatch(
+                courtName = court,
+                order = order,
+                left = left,
+                right = right,
+                scheduleLabel = scheduleLabel,
+                manualNotBefore = manualNotBefore,
+                eventCode = eventCode,
+                leftWinnerOf = leftWinnerOf,
+                rightWinnerOf = rightWinnerOf,
+            )
+        }
+
+        val notBefore1500 = toTodayMillis("15:00")
+        val start1000 = toTodayMillis("10:00")
+        val notBefore1200 = toTodayMillis("12:00")
+        val notBefore1430 = toTodayMillis("14:30")
+
+        val matches = listOf(
+            // Row 1
+            match("Court 2", 1, "Not Before 15:00", notBefore1500, "GSQ",
+                left = entrant("Elizaveta Bryakina", "EST", 2),
+                rightWinnerOf = ref("Court 4", 1)),
+            match("Court 3", 1, "Not Before 15:00", notBefore1500, "GSQ",
+                left = entrant("Lisette Leppik", "EST", 1),
+                rightWinnerOf = ref("Court 5", 1)),
+            match("Court 4", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Guste Maliutoryte", "LTU", 4),
+                right = entrant("Ivetta Serova", "EST")),
+            match("Court 5", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Ella-Maria Vosu", "EST"),
+                right = entrant("Amanda Nicoli", "FIN")),
+            match("Court 6", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Meta Petkute", "LTU"),
+                right = entrant("Krete Visnapuu", "EST")),
+            match("Court 7", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Zoe Kammandle", "GER"),
+                right = entrant("Arsineh Kazanjian", "EST")),
+            match("Court 8", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Doris Audova", "EST"),
+                right = entrant("Siiri Metsaeranta", "FIN", 5)),
+            match("Court 9", 1, "Starting at 10:00", start1000, "GSQ",
+                left = entrant("Sofia Traverso", "EST"),
+                right = entrant("Harriet Podra", "EST")),
+
+            // Row 2
+            match("Court 2", 2, "Followed By", null, "BSQ",
+                left = entrant("Callum Hooper", "GBR", 3),
+                rightWinnerOf = ref("Court 8", 3)),
+            match("Court 3", 2, "Followed By", null, "BSQ",
+                left = entrant("Markas Mazrimas", "LTU", 1),
+                rightWinnerOf = ref("Court 5", 3)),
+            match("Court 4", 2, "Followed By", null, "GSQ",
+                left = entrant("Amelia Maljugina", "EST"),
+                right = entrant("Emily Stoian", "USA")),
+            match("Court 5", 2, "Followed By", null, "GSQ",
+                left = entrant("Pilar Aurora Rim", "EST"),
+                right = entrant("Simona Sepp", "EST", 8)),
+            match("Court 6", 2, "Followed By", null, "GSQ",
+                left = entrant("Katlin Tonts", "EST"),
+                right = entrant("Ona Kleidisaite", "LTU")),
+            match("Court 7", 2, "Followed By", null, "GSQ",
+                left = entrant("Marta Vellerand", "EST"),
+                right = entrant("Ieva Sikliutaite", "LTU", 6)),
+            match("Court 8", 2, "Followed By", null, "GSQ",
+                left = entrant("Henriette Jarv", "EST"),
+                right = entrant("Alisa Lokk", "EST")),
+            match("Court 9", 2, "Followed By", null, "GSQ",
+                left = entrant("Mariana Nitu", "MDA", 3),
+                right = entrant("Kristel Eva Torkina", "EST")),
+
+            // Row 3
+            match("Court 4", 3, "Not Before 12:00", notBefore1200, "BSQ",
+                left = entrant("Leo Kurtilia", "FIN"),
+                right = entrant("Hugo Narmont", "EST", 8)),
+            match("Court 5", 3, "Not Before 12:00", notBefore1200, "BSQ",
+                left = entrant("Andreas Kuum", "EST"),
+                right = entrant("Jekabs Stikuts", "LAT")),
+            match("Court 6", 3, "Not Before 12:00", notBefore1200, "BSQ",
+                left = entrant("Kristjan Simon Hannus", "EST"),
+                right = entrant("Stanislaw Zaranski", "POL")),
+            match("Court 7", 3, "Not Before 12:00", notBefore1200, "BSQ",
+                left = entrant("Arvi Kauhanen", "FIN"),
+                right = entrant("Robin Rait Rikberg", "EST", 5)),
+            match("Court 8", 3, "Not Before 12:00", notBefore1200, "BSQ",
+                left = entrant("Evan Lainurm", "EST"),
+                right = entrant("Felix Standertskjold-Nordenstam", "FIN")),
+            match("Court 9", 3, "Not Before 12:00", notBefore1200, "GSQ",
+                left = entrant("Eliza Mangule", "LAT"),
+                right = entrant("Marie Roomussaar", "EST")),
+
+            // Row 4
+            match("Court 4", 4, "Followed By", null, "BSQ",
+                left = entrant("Otto Herman Pikk", "EST"),
+                right = entrant("Tom Barcia", "ITA")),
+            match("Court 5", 4, "Followed By", null, "GSQ",
+                left = entrant("Eva Laanots", "EST"),
+                right = entrant("Annika Alifin", "FIN", 7)),
+            match("Court 6", 4, "Followed By", null, "BSQ",
+                left = entrant("Hugo Thor Teiv", "EST"),
+                right = entrant("Richard Hiemann", "GER")),
+            match("Court 7", 4, "Followed By", null, "BSQ",
+                left = entrant("Marats Apens", "LAT"),
+                right = entrant("Joel Nylund", "FIN")),
+            match("Court 8", 4, "Followed By", null, "BSQ",
+                left = entrant("Euan Greenslade", "GBR"),
+                right = entrant("Arthur de Dampierre", "FIN")),
+            match("Court 9", 4, "Followed By", null, "BSQ",
+                left = entrant("Alexander Mononen", "FIN"),
+                right = entrant("Kristo Vellerand", "EST")),
+
+            // Row 5
+            match("Court 4", 5, "Not Before 14:30", notBefore1430, "GSQ",
+                leftWinnerOf = ref("Court 6", 1),
+                rightWinnerOf = ref("Court 7", 1)),
+            match("Court 5", 5, "Not Before 14:30", notBefore1430, "GSQ",
+                leftWinnerOf = ref("Court 8", 1),
+                rightWinnerOf = ref("Court 9", 1)),
+            match("Court 6", 5, "Not Before 14:30", notBefore1430, "BSQ",
+                left = entrant("Johann Juergen Hueherson", "EST"),
+                right = entrant("Samuel Tammi", "FIN", 6)),
+            match("Court 7", 5, "Not Before 14:30", notBefore1430, "GSQ",
+                leftWinnerOf = ref("Court 4", 2),
+                rightWinnerOf = ref("Court 5", 2)),
+            match("Court 8", 5, "Not Before 14:30", notBefore1430, "BSQ",
+                left = entrant("Leonardo Lori", "ITA"),
+                right = entrant("Aaron Kelle", "EST", 7)),
+            match("Court 9", 5, "Not Before 14:30", notBefore1430, "GSQ",
+                leftWinnerOf = ref("Court 6", 2),
+                rightWinnerOf = ref("Court 7", 2)),
+
+            // Row 6
+            match("Court 4", 6, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 4", 4),
+                rightWinnerOf = ref("Court 4", 3)),
+            match("Court 5", 6, "Followed By", null, "GSQ",
+                leftWinnerOf = ref("Court 8", 2),
+                rightWinnerOf = ref("Court 9", 2)),
+            match("Court 6", 6, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 6", 4),
+                rightWinnerOf = ref("Court 6", 5)),
+            match("Court 7", 6, "Followed By", null, "BSQ",
+                left = entrant("Konrad Punger", "EST", 4),
+                rightWinnerOf = ref("Court 7", 4)),
+            match("Court 8", 6, "Followed By", null, "GSQ",
+                leftWinnerOf = ref("Court 5", 4),
+                rightWinnerOf = ref("Court 9", 3)),
+            match("Court 9", 6, "Followed By", null, "BSQ",
+                left = entrant("Juozas Juozapavicius", "LTU", 2),
+                rightWinnerOf = ref("Court 9", 4)),
+
+            // Row 7
+            match("Court 6", 7, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 6", 3),
+                rightWinnerOf = ref("Court 7", 3)),
+            match("Court 8", 7, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 8", 4),
+                rightWinnerOf = ref("Court 8", 5)),
+        )
+
+        return ImportedOrderDocument(
+            tournamentName = "28.02.2026",
             courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
             matches = matches,
         )
@@ -3537,10 +3795,20 @@ class AppRepository @Inject constructor(
     private data class ImportedOrderMatch(
         val courtName: String,
         val order: Int,
-        val left: ParsedEntrant,
-        val right: ParsedEntrant,
+        val left: ParsedEntrant?,
+        val right: ParsedEntrant?,
         val scheduleLabel: String,
         val manualNotBefore: Long?,
+        val eventCode: String? = null,
+        val leftWinnerOf: ImportedMatchRef? = null,
+        val rightWinnerOf: ImportedMatchRef? = null,
+        val leftIsBye: Boolean = false,
+        val rightIsBye: Boolean = false,
+    )
+
+    private data class ImportedMatchRef(
+        val courtName: String,
+        val order: Int,
     )
 
     private data class ImportedOrderDocument(
