@@ -2059,13 +2059,17 @@ class AppRepository @Inject constructor(
             .normalizeSpaces()
             .trim()
 
-        if (takeTail && value.contains(')')) {
-            val tail = value.substringAfterLast(')').trim()
-            if (tail.isNotBlank()) value = tail
-        }
-        if (takeTail && value.contains(']')) {
-            val tail = value.substringAfterLast(']').trim()
-            if (tail.isNotBlank()) value = tail
+        // Do not aggressively trim by country/seed markers:
+        // OCR can place "(LAT)" between first and last names, and trimming would drop one side.
+        if (takeTail && value.split(' ').size > 8) {
+            if (value.contains(')')) {
+                val tail = value.substringAfterLast(')').trim()
+                if (tail.split(' ').size in 2..5) value = tail
+            }
+            if (value.contains(']')) {
+                val tail = value.substringAfterLast(']').trim()
+                if (tail.split(' ').size in 2..5) value = tail
+            }
         }
 
         val words = value.split(' ').filter { it.isNotBlank() }
