@@ -1545,19 +1545,7 @@ class AppRepository @Inject constructor(
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .toList()
-        if (lines.isEmpty()) return null
-
-        val courts = extractCourtNames(lines)
-        val courtNames = if (courts.isNotEmpty()) courts else listOf("Court 1")
-        val parsedMatches = extractMatchPairs(lines)
-        if (parsedMatches.isEmpty()) return null
-
-        val indexedMatches = assignParsedMatchesToCourts(parsedMatches, courtNames)
-        return ImportedOrderDocument(
-            tournamentName = extractTournamentName(lines) ?: "Imported Order Of Play",
-            courts = courtNames,
-            matches = indexedMatches,
-        )
+        return parseOrderOfPlayFromTextLines(lines)
     }
 
     private suspend fun readOrderOfPlayText(uri: Uri, mimeTypeHint: String? = null): String? = withContext(Dispatchers.IO) {
@@ -1659,19 +1647,59 @@ class AppRepository @Inject constructor(
             }
         }
 
-        if (matches.size < columns.size) return null
         val flatLines = recognized.text
             .replace('\u000C', '\n')
             .lineSequence()
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .toList()
-
-        return ImportedOrderDocument(
+        val tableDocument = ImportedOrderDocument(
             tournamentName = extractTournamentName(flatLines) ?: "Imported Order Of Play",
             courts = columns.map { it.name },
             matches = matches,
         )
+        val textDocument = parseOrderOfPlayFromTextLines(flatLines, fallbackCourts = columns.map { it.name })
+        return selectMoreCompleteDocument(listOfNotNull(tableDocument.takeIf { it.matches.isNotEmpty() }, textDocument))
+    }
+
+    private fun parseOrderOfPlayFromTextLines(
+        lines: List<String>,
+        fallbackCourts: List<String>? = null,
+    ): ImportedOrderDocument? {
+        if (lines.isEmpty()) return null
+        val courts = extractCourtNames(lines)
+        val courtNames = when {
+            courts.isNotEmpty() -> courts
+            !fallbackCourts.isNullOrEmpty() -> fallbackCourts
+            else -> listOf("Court 1")
+        }
+        val parsedMatches = extractMatchPairs(lines)
+        if (parsedMatches.isEmpty()) return null
+
+        val indexedMatches = assignParsedMatchesToCourts(parsedMatches, courtNames)
+        return ImportedOrderDocument(
+            tournamentName = extractTournamentName(lines) ?: "Imported Order Of Play",
+            courts = courtNames,
+            matches = indexedMatches,
+        )
+    }
+
+    private fun selectMoreCompleteDocument(candidates: List<ImportedOrderDocument>): ImportedOrderDocument? {
+        if (candidates.isEmpty()) return null
+        return candidates.maxByOrNull(::documentCompletenessScore)
+    }
+
+    private fun documentCompletenessScore(document: ImportedOrderDocument): Int {
+        if (document.matches.isEmpty()) return Int.MIN_VALUE
+        val uniqueCourts = document.matches.map { it.courtName }.distinct().size
+        val entrantQuality = document.matches.sumOf { match ->
+            val leftWords = match.left.name.split(' ').count { it.isNotBlank() }
+            val rightWords = match.right.name.split(' ').count { it.isNotBlank() }
+            val leftScore = if (leftWords >= 2) 2 else -2
+            val rightScore = if (rightWords >= 2) 2 else -2
+            leftScore + rightScore
+        }
+        return (document.matches.size * 100) + (uniqueCourts * 25) + entrantQuality
     }
 
     private fun extractOcrLines(recognized: Text): List<OcrLine> {
@@ -1766,22 +1794,31 @@ class AppRepository @Inject constructor(
                 acc
             }
 
-        val anchors = if (rowMarkers.isNotEmpty()) {
-            rowMarkers
-        } else {
-            lines
-                .filter { line ->
-                        line.top >= headerBottom &&
-                        containsScheduleKeyword(line.text)
+        val scheduleAnchors = lines
+            .filter { line ->
+                line.top >= headerBottom &&
+                    containsScheduleKeyword(line.text)
+            }
+            .sortedBy { it.centerY }
+            .fold(mutableListOf<Float>()) { acc, line ->
+                if (acc.isEmpty() || abs(acc.last() - line.centerY) > 24f) {
+                    acc += line.centerY
+                } else {
+                    acc[acc.lastIndex] = (acc.last() + line.centerY) / 2f
                 }
-                .sortedBy { it.centerY }
-                .fold(mutableListOf<Float>()) { acc, line ->
-                    if (acc.isEmpty() || abs(acc.last() - line.centerY) > 20f) {
-                        acc += line.centerY
-                    }
-                    acc
+                acc
+            }
+
+        val anchors = (rowMarkers + scheduleAnchors)
+            .sorted()
+            .fold(mutableListOf<Float>()) { acc, y ->
+                if (acc.isEmpty() || abs(acc.last() - y) > 18f) {
+                    acc += y
+                } else {
+                    acc[acc.lastIndex] = (acc.last() + y) / 2f
                 }
-        }
+                acc
+            }
 
         if (anchors.isEmpty()) {
             return listOf(
