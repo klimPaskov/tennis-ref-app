@@ -393,45 +393,96 @@ class AppRepository @Inject constructor(
                 }
                 .values
                 .toList()
-            val players = entrants.mapIndexed { index, entrant ->
+
+            data class TeamDraft(
+                val entrantName: String,
+                val countryCode: String?,
+                val seed: Int?,
+                val memberNames: List<String>,
+            )
+            data class PlayerDraft(
+                val name: String,
+                val countryCode: String?,
+                var seed: Int?,
+            )
+
+            val teamDrafts = entrants.map { entrant ->
+                TeamDraft(
+                    entrantName = entrant.name,
+                    countryCode = entrant.countryCode,
+                    seed = entrant.seed,
+                    memberNames = if (entrant.memberNames.isNotEmpty()) {
+                        entrant.memberNames
+                    } else {
+                        splitEntrantIntoPlayerNames(entrant.name)
+                    },
+                )
+            }
+
+            val playerDraftByKey = linkedMapOf<String, PlayerDraft>()
+            teamDrafts.forEach { team ->
+                team.memberNames.forEachIndexed { memberIndex, memberName ->
+                    val key = teamPlayerKey(memberName, team.countryCode)
+                    val incomingSeed = if (team.memberNames.size == 1 || memberIndex == 0) team.seed else null
+                    val existing = playerDraftByKey[key]
+                    if (existing == null) {
+                        playerDraftByKey[key] = PlayerDraft(
+                            name = memberName,
+                            countryCode = team.countryCode,
+                            seed = incomingSeed,
+                        )
+                    } else if (existing.seed == null && incomingSeed != null) {
+                        existing.seed = incomingSeed
+                    }
+                }
+            }
+
+            val players = playerDraftByKey.values.mapIndexed { index, draft ->
                 PlayerEntity(
                     id = (index + 1).toLong(),
                     tournamentId = 1L,
-                    displayName = buildEntrantDisplayName(entrant.name, entrant.seed),
-                    countryCode = entrant.countryCode,
+                    displayName = buildEntrantDisplayName(draft.name, draft.seed),
+                    countryCode = draft.countryCode,
                     restMinutes = DEFAULT_REST_MINUTES,
                 )
             }
             playerDao.insertAll(players)
-            teamDao.insertAll(
-                players.map { player ->
-                    TeamEntity(
-                        id = player.id,
-                        tournamentId = player.tournamentId,
-                        name = null,
-                    )
-                },
-            )
+
+            val teamEntities = teamDrafts.mapIndexed { index, draft ->
+                TeamEntity(
+                    id = (index + 1).toLong(),
+                    tournamentId = 1L,
+                    name = if (draft.memberNames.size > 1) draft.memberNames.joinToString(" / ") else null,
+                )
+            }
+            teamDao.insertAll(teamEntities)
+
+            val playerIdByKey = playerDraftByKey.keys
+                .mapIndexed { index, key -> key to (index + 1L) }
+                .toMap()
             teamPlayerDao.insertAll(
-                players.map { player ->
-                    TeamPlayerCrossRefEntity(
-                        teamId = player.id,
-                        playerId = player.id,
-                        playerOrder = 0,
-                    )
+                teamDrafts.flatMapIndexed { teamIndex, team ->
+                    val teamId = (teamIndex + 1L)
+                    team.memberNames.mapIndexed { memberOrder, memberName ->
+                        TeamPlayerCrossRefEntity(
+                            teamId = teamId,
+                            playerId = playerIdByKey.getValue(teamPlayerKey(memberName, team.countryCode)),
+                            playerOrder = memberOrder,
+                        )
+                    }
                 },
             )
 
-            val playerIdByName = entrants
-                .mapIndexed { index, entrant -> entrant.name to (index + 1L) }
+            val teamIdByEntrantName = teamDrafts
+                .mapIndexed { index, draft -> draft.entrantName to (index + 1L) }
                 .toMap()
             val matchEntities = mutableListOf<MatchEntity>()
             val slotEntities = mutableListOf<SlotEntity>()
             var matchId = 100L
             imported.matches.forEach { importedMatch ->
                 val currentMatchId = matchId++
-                val leftTeamId = playerIdByName[importedMatch.left.name] ?: return@forEach
-                val rightTeamId = playerIdByName[importedMatch.right.name] ?: return@forEach
+                val leftTeamId = teamIdByEntrantName[importedMatch.left.name] ?: return@forEach
+                val rightTeamId = teamIdByEntrantName[importedMatch.right.name] ?: return@forEach
                 matchEntities += MatchEntity(
                     id = currentMatchId,
                     tournamentId = 1L,
@@ -2575,11 +2626,25 @@ class AppRepository @Inject constructor(
         return existing.copy(
             countryCode = existing.countryCode ?: incoming.countryCode,
             seed = existing.seed ?: incoming.seed,
+            memberNames = if (existing.memberNames.isNotEmpty()) existing.memberNames else incoming.memberNames,
         )
     }
 
     private fun buildEntrantDisplayName(name: String, seed: Int?): String {
         return if (seed != null) "$name [$seed]" else name
+    }
+
+    private fun splitEntrantIntoPlayerNames(rawName: String): List<String> {
+        val normalized = rawName.normalizeSpaces()
+        val pieces = Regex("(?i)\\s*(?:/|&|\\band\\b)\\s*")
+            .split(normalized)
+            .map { it.normalizeSpaces() }
+            .filter { token -> token.isNotBlank() }
+        return if (pieces.size >= 2) pieces else listOf(normalized)
+    }
+
+    private fun teamPlayerKey(name: String, countryCode: String?): String {
+        return "${name.normalizeSpaces().lowercase()}|${countryCode?.trim()?.uppercase().orEmpty()}"
     }
 
     private fun sanitizeSeedConflict(
@@ -3063,6 +3128,7 @@ class AppRepository @Inject constructor(
     private fun parseEntrant(raw: String): ParsedEntrant? {
         val matchedCountry = detectCountryCode(raw)
         val seed = detectSeed(raw, matchedCountry)
+        val memberNames = extractTeamMemberNames(raw, matchedCountry)
 
         val cleaned = raw
             .replace(Regex("\\[[^\\]]*]"), "")
@@ -3080,6 +3146,14 @@ class AppRepository @Inject constructor(
             .replace(".", " ")
             .normalizeSpaces()
             .trim()
+        if (memberNames.size >= 2) {
+            return ParsedEntrant(
+                name = memberNames.joinToString(" / "),
+                countryCode = matchedCountry,
+                seed = seed,
+                memberNames = memberNames,
+            )
+        }
         if (cleaned.isBlank()) return null
         val tokens = cleaned
             .split(' ')
@@ -3102,7 +3176,52 @@ class AppRepository @Inject constructor(
             name = name,
             countryCode = matchedCountry,
             seed = seed,
+            memberNames = emptyList(),
         )
+    }
+
+    private fun extractTeamMemberNames(raw: String, matchedCountry: String?): List<String> {
+        val hasSeparator = Regex("(?i)(/|&|\\band\\b)").containsMatchIn(raw)
+        if (!hasSeparator) return emptyList()
+
+        val cleaned = raw
+            .replace(Regex("\\[[^\\]]*]"), "")
+            .replace(Regex("\\((\\d{1,2})\\)"), " ")
+            .replace(Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)"), " ")
+            .replace(Regex("(?i)\\b(?:GS|BS)\\b"), " ")
+            .replace(Regex("(?i)\\b(?:starting\\s+at|followed\\s+by|not\\s+before)\\b"), " ")
+            .replace(Regex("(?i)^court\\s+[A-Za-z0-9]+\\s*"), "")
+            .replace(Regex("^\\d+\\.?\\s*"), "")
+            .replace(Regex("\\b\\d{1,2}:\\d{2}\\b"), " ")
+            .replace(Regex("\\s+\\d+[\\-:][0-9()\\-:\\s]*$"), " ")
+            .replace(Regex("(^|\\s)[\\d()\\-:]+($|\\s)"), " ")
+            .replace("(", " ")
+            .replace(")", " ")
+            .replace(".", " ")
+            .normalizeSpaces()
+            .trim()
+
+        val segments = Regex("(?i)\\s*(?:/|&|\\band\\b)\\s*")
+            .split(cleaned)
+            .map { segment ->
+                val tokens = segment
+                    .split(' ')
+                    .map(::normalizeNameToken)
+                    .filter { token ->
+                        token.isNotBlank() &&
+                            token.any { it.isLetter() } &&
+                            token.length > 1 &&
+                            !token.equals("AND", ignoreCase = true) &&
+                            !tokenMatchesCountry(token, matchedCountry) &&
+                            !isLikelySeedArtifactToken(token)
+                    }
+                val normalized = cleanupNameTokens(tokens)
+                normalizePersonNameCase(normalized.joinToString(" ").normalizeSpaces()).ifBlank { "" }
+            }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        return if (segments.size >= 2) segments else emptyList()
     }
 
     private fun tokenMatchesCountry(token: String, countryCode: String?): Boolean {
@@ -3338,6 +3457,7 @@ class AppRepository @Inject constructor(
         val name: String,
         val countryCode: String?,
         val seed: Int?,
+        val memberNames: List<String> = emptyList(),
     )
 
     private data class ParsedPair(
