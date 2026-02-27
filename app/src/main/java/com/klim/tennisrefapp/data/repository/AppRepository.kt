@@ -30,6 +30,9 @@ import com.klim.tennisrefapp.domain.model.CourtCard
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.CompletedCourtMatch
+import com.klim.tennisrefapp.domain.model.DrawBoard
+import com.klim.tennisrefapp.domain.model.DrawMatchNode
+import com.klim.tennisrefapp.domain.model.DrawRound
 import com.klim.tennisrefapp.domain.model.MatchDependency
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
@@ -734,10 +737,10 @@ class AppRepository @Inject constructor(
             // Row 1
             match("Court 2", 1, "Not Before 15:00", notBefore1500, "GSQ",
                 left = entrant("Elizaveta Bryakina", "EST", 2),
-                rightWinnerOf = ref("Court 4", 1)),
+                rightWinnerOf = ref("Court 6", 2)),
             match("Court 3", 1, "Not Before 15:00", notBefore1500, "GSQ",
                 left = entrant("Lisette Leppik", "EST", 1),
-                rightWinnerOf = ref("Court 5", 1)),
+                rightWinnerOf = ref("Court 8", 2)),
             match("Court 4", 1, "Starting at 10:00", start1000, "GSQ",
                 left = entrant("Guste Maliutoryte", "LTU", 4),
                 right = entrant("Ivetta Serova", "EST")),
@@ -826,21 +829,21 @@ class AppRepository @Inject constructor(
             // Row 5
             match("Court 4", 5, "Not Before 14:30", notBefore1430, "GSQ",
                 leftWinnerOf = ref("Court 6", 1),
-                rightWinnerOf = ref("Court 7", 1)),
+                rightWinnerOf = ref("Court 5", 4)),
             match("Court 5", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 8", 1),
-                rightWinnerOf = ref("Court 9", 1)),
+                leftWinnerOf = ref("Court 9", 3),
+                rightWinnerOf = ref("Court 8", 1)),
             match("Court 6", 5, "Not Before 14:30", notBefore1430, "BSQ",
                 left = entrant("Johann Juergen Hueherson", "EST"),
                 right = entrant("Samuel Tammi", "FIN", 6)),
             match("Court 7", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 4", 2),
-                rightWinnerOf = ref("Court 5", 2)),
+                leftWinnerOf = ref("Court 9", 2),
+                rightWinnerOf = ref("Court 9", 1)),
             match("Court 8", 5, "Not Before 14:30", notBefore1430, "BSQ",
                 left = entrant("Leonardo Lori", "ITA"),
                 right = entrant("Aaron Kelle", "EST", 7)),
             match("Court 9", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 6", 2),
+                leftWinnerOf = ref("Court 7", 1),
                 rightWinnerOf = ref("Court 7", 2)),
 
             // Row 6
@@ -848,8 +851,8 @@ class AppRepository @Inject constructor(
                 leftWinnerOf = ref("Court 4", 4),
                 rightWinnerOf = ref("Court 2", 2)),
             match("Court 5", 6, "Followed By", null, "GSQ",
-                leftWinnerOf = ref("Court 8", 2),
-                rightWinnerOf = ref("Court 9", 2)),
+                leftWinnerOf = ref("Court 4", 5),
+                rightWinnerOf = ref("Court 5", 5)),
             match("Court 6", 6, "Followed By", null, "BSQ",
                 leftWinnerOf = ref("Court 6", 4),
                 rightWinnerOf = ref("Court 6", 5)),
@@ -857,8 +860,8 @@ class AppRepository @Inject constructor(
                 left = entrant("Konrad Punger", "EST", 4),
                 rightWinnerOf = ref("Court 7", 4)),
             match("Court 8", 6, "Followed By", null, "GSQ",
-                leftWinnerOf = ref("Court 5", 4),
-                rightWinnerOf = ref("Court 9", 3)),
+                leftWinnerOf = ref("Court 7", 5),
+                rightWinnerOf = ref("Court 9", 5)),
             match("Court 9", 6, "Followed By", null, "BSQ",
                 left = entrant("Juozas Juozapavicius", "LTU", 2),
                 rightWinnerOf = ref("Court 9", 4)),
@@ -1155,6 +1158,98 @@ class AppRepository @Inject constructor(
                     )
                 },
             )
+        }
+    }
+
+    override fun observeDrawBoards(): Flow<List<DrawBoard>> {
+        return combine(
+            courtDao.observeActiveCourts(),
+            matchDao.observeAll(),
+            slotDao.observeAll(),
+            teamPlayerDao.observeAll(),
+            playerDao.observeAll(),
+            tournamentDao.observeFirst(),
+        ) { values ->
+            @Suppress("UNCHECKED_CAST")
+            val courts = values[0] as List<CourtEntity>
+            @Suppress("UNCHECKED_CAST")
+            val matches = values[1] as List<MatchEntity>
+            @Suppress("UNCHECKED_CAST")
+            val slots = values[2] as List<SlotEntity>
+            @Suppress("UNCHECKED_CAST")
+            val teamPlayers = values[3] as List<TeamPlayerCrossRefEntity>
+            @Suppress("UNCHECKED_CAST")
+            val players = values[4] as List<PlayerEntity>
+            val tournament = values[5] as TournamentEntity?
+
+            val slotsByMatch = slots.groupBy { it.matchId }
+            val context = BuildContext(
+                matches = matches,
+                slotsByMatch = slotsByMatch,
+                playersById = players.associateBy { it.id },
+                teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                    entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                },
+                defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+            )
+            val courtSortById = courts.associate { it.id to it.sortOrder }
+            val courtNameById = courts.associate { it.id to it.name }
+            val depthCache = mutableMapOf<Long, Int>()
+
+            val nodes = matches.mapNotNull { match ->
+                val eventCode = extractEventCodeFromRoundName(match.roundName) ?: return@mapNotNull null
+                val left = sideForMatch(match.id, SlotPosition.LEFT, context)
+                val right = sideForMatch(match.id, SlotPosition.RIGHT, context)
+                val depth = computeDrawDepth(
+                    matchId = match.id,
+                    slotsByMatch = slotsByMatch,
+                    cache = depthCache,
+                    visiting = mutableSetOf(),
+                )
+                DrawNodeWithMeta(
+                    eventCode = eventCode,
+                    depth = depth,
+                    order = extractOrderFromRoundName(match.roundName, match.id),
+                    courtSort = match.courtId?.let { courtSortById[it] } ?: Int.MAX_VALUE,
+                    node = DrawMatchNode(
+                        matchId = match.id,
+                        order = extractOrderFromRoundName(match.roundName, match.id),
+                        courtName = match.courtId?.let { courtNameById[it] ?: "Court $it" },
+                        leftLabel = left?.label ?: "TBD",
+                        rightLabel = right?.label ?: "TBD",
+                        winnerLabel = match.winnerTeamId?.let { labelForTeam(it, context) },
+                        scoreLabel = buildScoreLabel(match.scoreText, match.resultType),
+                        status = match.status.toCourtStatus(),
+                    ),
+                )
+            }
+
+            nodes.groupBy { it.eventCode }
+                .toList()
+                .sortedBy { (eventCode, _) -> eventSortWeight(eventCode) }
+                .map { (eventCode, eventNodes) ->
+                    val maxDepth = eventNodes.maxOfOrNull { it.depth } ?: 1
+                    DrawBoard(
+                        eventCode = eventCode,
+                        rounds = eventNodes
+                            .groupBy { it.depth }
+                            .toList()
+                            .sortedBy { (depth, _) -> depth }
+                            .map { (depth, roundNodes) ->
+                                DrawRound(
+                                    depth = depth,
+                                    label = drawRoundLabel(depth = depth, maxDepth = maxDepth),
+                                    matches = roundNodes
+                                        .sortedWith(
+                                            compareBy<DrawNodeWithMeta> { it.order }
+                                                .thenBy { it.courtSort }
+                                                .thenBy { it.node.matchId },
+                                        )
+                                        .map { it.node },
+                                )
+                            },
+                    )
+                }
         }
     }
 
@@ -1809,7 +1904,7 @@ class AppRepository @Inject constructor(
                     label = if (resolution.resolvedTeamId != null) {
                         labelForTeam(resolution.resolvedTeamId, context)
                     } else {
-                        "Winner of Match ${winnerOfMatch ?: "?"}"
+                        "TBD"
                     },
                     players = players,
                     resolvedTeamId = resolution.resolvedTeamId,
@@ -1917,6 +2012,68 @@ class AppRepository @Inject constructor(
             val ended = snapshot.endedAtMillis ?: return@any false
             val durationMinutes = ((ended - started).coerceAtLeast(0L) / 60_000L).toInt()
             durationMinutes >= REST_PROMPT_MIN_MATCH_MINUTES
+        }
+    }
+
+    private fun computeDrawDepth(
+        matchId: Long,
+        slotsByMatch: Map<Long, List<SlotEntity>>,
+        cache: MutableMap<Long, Int>,
+        visiting: MutableSet<Long>,
+    ): Int {
+        cache[matchId]?.let { return it }
+        if (!visiting.add(matchId)) return 1
+        val dependencies = slotsByMatch[matchId].orEmpty()
+            .mapNotNull { slot ->
+                if (slot.slotType == SlotType.WINNER_OF_MATCH) slot.winnerOfMatchId else null
+            }
+            .distinct()
+        val depth = if (dependencies.isEmpty()) {
+            1
+        } else {
+            dependencies.maxOf { dependencyId ->
+                computeDrawDepth(
+                    matchId = dependencyId,
+                    slotsByMatch = slotsByMatch,
+                    cache = cache,
+                    visiting = visiting,
+                )
+            } + 1
+        }
+        visiting.remove(matchId)
+        cache[matchId] = depth
+        return depth
+    }
+
+    private fun extractEventCodeFromRoundName(roundName: String?): String? {
+        val value = roundName?.trim().orEmpty()
+        if (value.isBlank()) return null
+        return Regex("\\b([A-Z]{3,4})\\s*$")
+            .find(value)
+            ?.groupValues
+            ?.getOrNull(1)
+    }
+
+    private fun extractOrderFromRoundName(roundName: String?, fallback: Long): Int {
+        return roundName
+            ?.let { Regex("^\\s*(\\d+)\\b").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            ?: fallback.toInt()
+    }
+
+    private fun drawRoundLabel(depth: Int, maxDepth: Int): String {
+        return when {
+            depth == maxDepth && maxDepth >= 2 -> "Final"
+            depth == maxDepth - 1 && maxDepth >= 3 -> "Semi-finals"
+            depth == maxDepth - 2 && maxDepth >= 4 -> "Quarter-finals"
+            else -> "Round $depth"
+        }
+    }
+
+    private fun eventSortWeight(eventCode: String): String {
+        return when (eventCode.uppercase()) {
+            "BSQ" -> "0_$eventCode"
+            "GSQ" -> "1_$eventCode"
+            else -> "2_$eventCode"
         }
     }
 
@@ -3703,6 +3860,14 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private data class DrawNodeWithMeta(
+        val eventCode: String,
+        val depth: Int,
+        val order: Int,
+        val courtSort: Int,
+        val node: DrawMatchNode,
+    )
+
     private data class BuildContext(
         val matches: List<MatchEntity>,
         val slotsByMatch: Map<Long, List<SlotEntity>>,
@@ -3857,6 +4022,7 @@ class AppRepository @Inject constructor(
             "SLO" to "SI",
             "SUI" to "CH",
             "SWE" to "SE",
+            "USA" to "US",
             "UKR" to "UA",
         )
         val ISO2_CODES = ISO3_TO_ISO2.values.toSet()

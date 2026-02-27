@@ -38,6 +38,7 @@ fun HomeRoute(
     onContinue: () -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
+    onDraws: () -> Unit,
     onSettings: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
@@ -74,6 +75,7 @@ fun HomeRoute(
         onLoadPreloaded = viewModel::onLoadPreloadedOrderOfPlay,
         onPlayers = onPlayers,
         onHistory = onHistory,
+        onDraws = onDraws,
         onSettings = onSettings,
         snackbarHostState = snackbarHostState,
     )
@@ -89,6 +91,7 @@ private fun HomeScreen(
     onLoadPreloaded: (String) -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
+    onDraws: () -> Unit,
     onSettings: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
@@ -97,7 +100,7 @@ private fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Order Of Play") })
+            TopAppBar(title = { Text("Home") })
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
@@ -116,6 +119,9 @@ private fun HomeScreen(
             }
             Button(onClick = onHistory, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("History")
+            }
+            Button(onClick = onDraws, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                Text("Draws")
             }
             Button(onClick = onSettings, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("Settings")

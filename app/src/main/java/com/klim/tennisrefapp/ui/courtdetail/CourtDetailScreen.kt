@@ -1912,6 +1912,7 @@ private val ISO3_TO_ISO2 = mapOf(
     "SLO" to "SI",
     "SUI" to "CH",
     "SWE" to "SE",
+    "USA" to "US",
     "UKR" to "UA",
 )
 
