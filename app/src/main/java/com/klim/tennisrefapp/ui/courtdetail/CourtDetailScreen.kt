@@ -31,6 +31,8 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material.icons.outlined.MedicalServices
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -85,6 +87,8 @@ import com.klim.tennisrefapp.data.timer.CourtTimerState
 import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
+import com.klim.tennisrefapp.domain.model.MatchEvent
+import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.model.PlayerRef
 import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
@@ -180,7 +184,6 @@ private val inProgressTimers = listOf(
     CourtTimerType.SET_BREAK,
     CourtTimerType.TOILET_BREAK,
     CourtTimerType.OFF_COURT,
-    CourtTimerType.MEDICAL_TIMEOUT,
     CourtTimerType.EQUIPMENT_FIX,
 )
 
@@ -223,8 +226,10 @@ fun CourtDetailRoute(
         onStartMatchNow = viewModel::onStartMatch,
         onStartTimer = viewModel::onStartTimer,
         onStopTimer = viewModel::onStopTimer,
+        onStartMedicalTimeout = viewModel::onStartMedicalTimeout,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
+        onSaveLiveScoreSnapshot = viewModel::onSaveLiveScoreSnapshot,
         onDismissRestPrompt = viewModel::onDismissRestPrompt,
         onApplyRestChoices = viewModel::onApplyRestChoices,
         onUndoViolation = viewModel::onUndoLastViolation,
@@ -242,8 +247,10 @@ private fun CourtDetailScreen(
     onStartMatchNow: () -> Unit,
     onStartTimer: (CourtTimerType) -> Unit,
     onStopTimer: () -> Unit,
+    onStartMedicalTimeout: (Long) -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
+    onSaveLiveScoreSnapshot: (String) -> Unit,
     onDismissRestPrompt: () -> Unit,
     onApplyRestChoices: (Map<Long, Int>) -> Unit,
     onUndoViolation: () -> Unit,
@@ -254,6 +261,8 @@ private fun CourtDetailScreen(
     var showScoreDialog by remember { mutableStateOf(false) }
     var showTimerDialog by remember { mutableStateOf(false) }
     var showArgumentDialog by remember { mutableStateOf(false) }
+    var showMedicalTimeoutDialog by remember { mutableStateOf(false) }
+    var showLiveScoreDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -307,14 +316,21 @@ private fun CourtDetailScreen(
                 }
 
                 CourtStatus.IN_PROGRESS -> {
+                    val matchPlayers = detail.leftSide?.players.orEmpty() + detail.rightSide?.players.orEmpty()
                     InProgressActions(
                         timerState = uiState.timerState,
                         totalViolationCount = totalViolationCount(uiState.violationCountsByPlayer),
+                        latestLiveScoreLabel = latestLiveScoreSnapshotLabel(uiState.matchEvents),
                         onOpenTimer = { showTimerDialog = true },
+                        onOpenMedicalTimeout = { showMedicalTimeoutDialog = true },
+                        onOpenLiveScore = { showLiveScoreDialog = true },
                         onOpenViolations = { showViolationDialog = true },
                         onOpenArgumentSolver = { showArgumentDialog = true },
                         onOpenFinalScore = { showScoreDialog = true },
                         onUndoViolation = onUndoViolation,
+                        medicalTimeoutEnabled = matchPlayers.any { player ->
+                            !hasMedicalTimeoutStarted(uiState.matchEvents, player.playerId)
+                        },
                     )
                 }
 
@@ -360,10 +376,33 @@ private fun CourtDetailScreen(
         FinalScoreDialog(
             leftName = sidePrimaryLabel(detail.leftSide),
             rightName = sidePrimaryLabel(detail.rightSide),
+            isDoublesMatch = isDoublesMatch(detail),
             onDismiss = { showScoreDialog = false },
             onSubmit = { winnerSide, score ->
                 onSubmitFinalScore(winnerSide, score)
                 showScoreDialog = false
+            },
+        )
+    }
+
+    if (showMedicalTimeoutDialog && detail != null) {
+        MedicalTimeoutDialog(
+            players = detail.leftSide?.players.orEmpty() + detail.rightSide?.players.orEmpty(),
+            usedPlayerIds = usedMedicalTimeoutPlayerIds(uiState.matchEvents),
+            onDismiss = { showMedicalTimeoutDialog = false },
+            onStartMedicalTimeout = { playerId ->
+                onStartMedicalTimeout(playerId)
+                showMedicalTimeoutDialog = false
+            },
+        )
+    }
+
+    if (showLiveScoreDialog) {
+        LiveScoreSnapshotDialog(
+            onDismiss = { showLiveScoreDialog = false },
+            onSave = { score ->
+                onSaveLiveScoreSnapshot(score)
+                showLiveScoreDialog = false
             },
         )
     }
@@ -500,11 +539,15 @@ private fun SidePanels(
 private fun InProgressActions(
     timerState: CourtTimerState?,
     totalViolationCount: Int,
+    latestLiveScoreLabel: String?,
     onOpenTimer: () -> Unit,
+    onOpenMedicalTimeout: () -> Unit,
+    onOpenLiveScore: () -> Unit,
     onOpenViolations: () -> Unit,
     onOpenArgumentSolver: () -> Unit,
     onOpenFinalScore: () -> Unit,
     onUndoViolation: () -> Unit,
+    medicalTimeoutEnabled: Boolean,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -517,6 +560,16 @@ private fun InProgressActions(
                 text = " ${timerButtonLabel(timerState)}",
                 style = MaterialTheme.typography.labelLarge,
             )
+        }
+        FilledTonalIconButton(
+            onClick = onOpenMedicalTimeout,
+            modifier = Modifier.size(34.dp),
+            enabled = medicalTimeoutEnabled,
+        ) {
+            Icon(Icons.Outlined.MedicalServices, contentDescription = "Medical timeout")
+        }
+        FilledTonalIconButton(onClick = onOpenLiveScore, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Outlined.EditNote, contentDescription = "Save live score")
         }
         BadgedBox(
             badge = {
@@ -535,6 +588,14 @@ private fun InProgressActions(
         FilledTonalIconButton(onClick = onUndoViolation, modifier = Modifier.size(34.dp)) {
             Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo last violation")
         }
+    }
+
+    if (!latestLiveScoreLabel.isNullOrBlank()) {
+        Text(
+            text = "Latest score: $latestLiveScoreLabel",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 
     Button(onClick = onOpenFinalScore, modifier = Modifier.fillMaxWidth()) {
@@ -591,6 +652,78 @@ private fun TimerDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+}
+
+@Composable
+private fun MedicalTimeoutDialog(
+    players: List<PlayerRef>,
+    usedPlayerIds: Set<Long>,
+    onDismiss: () -> Unit,
+    onStartMedicalTimeout: (Long) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Medical Timeout") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (players.isEmpty()) {
+                    Text("No players available.")
+                } else {
+                    players.forEach { player ->
+                        val used = player.playerId in usedPlayerIds
+                        OutlinedButton(
+                            onClick = { onStartMedicalTimeout(player.playerId) },
+                            enabled = !used,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            val suffix = if (used) " (used)" else ""
+                            Text(displayPlayerLabel(player) + suffix)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+}
+
+@Composable
+private fun LiveScoreSnapshotDialog(
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var score by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save Live Score") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Enter current score (for example 6:4 2:1).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextField(
+                    value = score,
+                    onValueChange = { score = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(score) },
+                enabled = score.trim().isNotBlank(),
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }
@@ -886,12 +1019,13 @@ private fun ArgumentClaimRow(
 private fun FinalScoreDialog(
     leftName: String,
     rightName: String,
+    isDoublesMatch: Boolean,
     onDismiss: () -> Unit,
     onSubmit: (MatchWinnerSide, String) -> Unit,
 ) {
     var winner by remember { mutableStateOf<MatchWinnerSide?>(null) }
     var showRetConfirmation by remember { mutableStateOf(false) }
-    var isThirdSetMatchTieBreakToTen by remember { mutableStateOf(false) }
+    var thirdSetMatchTieBreakSetting by remember { mutableStateOf(false) }
     var set1Left by remember { mutableStateOf("") }
     var set1Right by remember { mutableStateOf("") }
     var set1TieBreak by remember { mutableStateOf("") }
@@ -902,6 +1036,7 @@ private fun FinalScoreDialog(
     var set3Right by remember { mutableStateOf("") }
     var set3TieBreak by remember { mutableStateOf("") }
     val showThirdSet = needsThirdSet(set1Left, set1Right, set2Left, set2Right)
+    val isThirdSetMatchTieBreakToTen = if (isDoublesMatch) true else thirdSetMatchTieBreakSetting
     val scoreText = buildScoreFromSetFields(
         listOf(
             SetScoreInput(set1Left, set1Right, set1TieBreak),
@@ -968,14 +1103,22 @@ private fun FinalScoreDialog(
                     isLastVisibleRow = !showThirdSet,
                 )
                 if (showThirdSet) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        FilterChip(
-                            selected = isThirdSetMatchTieBreakToTen,
-                            onClick = { isThirdSetMatchTieBreakToTen = !isThirdSetMatchTieBreakToTen },
-                            label = { Text("Set 3 MTB to 10") },
+                    if (!isDoublesMatch) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            FilterChip(
+                                selected = isThirdSetMatchTieBreakToTen,
+                                onClick = { thirdSetMatchTieBreakSetting = !thirdSetMatchTieBreakSetting },
+                                label = { Text("Set 3 MTB to 10") },
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Set 3 uses match tie-break to 10 (doubles).",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
                         )
                     }
                     ScoreSetRow(
@@ -996,7 +1139,7 @@ private fun FinalScoreDialog(
                             )
                         },
                         onTieBreakLoserChange = { set3TieBreak = sanitizeTieBreakCell(it) },
-                        showTieBreakFields = isTieBreakSet(set3Left, set3Right),
+                        showTieBreakFields = !isThirdSetMatchTieBreakToTen && isTieBreakSet(set3Left, set3Right),
                         autoAdvanceAfterSingleDigit = !isThirdSetMatchTieBreakToTen,
                         isLastVisibleRow = true,
                     )
@@ -1636,6 +1779,49 @@ private fun sidePrimaryLabel(side: SideParticipant?): String {
     }
 }
 
+private fun isDoublesMatch(detail: CourtDetail): Boolean {
+    val leftCount = detail.leftSide?.players?.size ?: 0
+    val rightCount = detail.rightSide?.players?.size ?: 0
+    return leftCount > 1 || rightCount > 1
+}
+
+private fun usedMedicalTimeoutPlayerIds(events: List<MatchEvent>): Set<Long> {
+    return events
+        .filter { event ->
+            event.kind == MatchEventKind.TIMER &&
+                event.message?.startsWith("TIMER|MEDICAL_TIMEOUT|START") == true
+        }
+        .mapNotNull { event -> extractPlayerIdFromTimerEventMessage(event.message) }
+        .toSet()
+}
+
+private fun hasMedicalTimeoutStarted(
+    events: List<MatchEvent>,
+    playerId: Long,
+): Boolean {
+    return usedMedicalTimeoutPlayerIds(events).contains(playerId)
+}
+
+private fun latestLiveScoreSnapshotLabel(
+    events: List<MatchEvent>,
+): String? {
+    val latest = events.lastOrNull { event ->
+        event.kind == MatchEventKind.TIMER &&
+            event.message?.startsWith("SCORE_SNAPSHOT|") == true
+    } ?: return null
+    val score = latest.message?.substringAfter("SCORE_SNAPSHOT|")?.trim().orEmpty()
+    if (score.isBlank()) return null
+    return "$score (${formatTime(latest.timestamp)})"
+}
+
+private fun extractPlayerIdFromTimerEventMessage(message: String?): Long? {
+    val token = message
+        ?.split("|")
+        ?.firstOrNull { part -> part.startsWith("playerId=") }
+        ?: return null
+    return token.substringAfter("=").trim().toLongOrNull()
+}
+
 private fun totalViolationCount(countsByPlayer: Map<Long, ViolationCounts>): Int {
     return countsByPlayer.values.sumOf { counts ->
         counts.codeViolationCount + counts.timeViolationCountServer + counts.timeViolationCountReceiver
@@ -1825,8 +2011,10 @@ private fun CourtDetailScheduledPreview() {
             onStartMatchNow = {},
             onStartTimer = {},
             onStopTimer = {},
+            onStartMedicalTimeout = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onSaveLiveScoreSnapshot = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
             onUndoViolation = {},
@@ -1877,8 +2065,10 @@ private fun CourtDetailCompletedPreview() {
             onStartMatchNow = {},
             onStartTimer = {},
             onStopTimer = {},
+            onStartMedicalTimeout = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onSaveLiveScoreSnapshot = {},
             onDismissRestPrompt = {},
             onApplyRestChoices = {},
             onUndoViolation = {},

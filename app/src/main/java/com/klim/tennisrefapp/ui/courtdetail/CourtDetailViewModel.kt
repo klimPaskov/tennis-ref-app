@@ -215,6 +215,55 @@ class CourtDetailViewModel @Inject constructor(
         timerManager.stop(detail.courtId)
     }
 
+    fun onStartMedicalTimeout(playerId: Long) {
+        val detail = uiState.value.detail ?: return
+        val matchId = detail.matchId ?: return
+        if (detail.status != CourtStatus.IN_PROGRESS) return
+
+        val player = (detail.leftSide?.players.orEmpty() + detail.rightSide?.players.orEmpty())
+            .firstOrNull { it.playerId == playerId }
+        if (player == null) {
+            feedbackMessage.value = UiFeedback("Player not found for this match.")
+            return
+        }
+
+        if (hasMedicalTimeoutAlreadyUsed(uiState.value.matchEvents, playerId)) {
+            feedbackMessage.value = UiFeedback("${player.name} already used medical timeout.")
+            return
+        }
+
+        timerManager.startOrRestart(
+            courtId = detail.courtId,
+            matchId = matchId,
+            courtName = detail.courtName,
+            timerType = CourtTimerType.MEDICAL_TIMEOUT,
+            subjectPlayerId = player.playerId,
+            subjectPlayerName = player.name,
+        )
+        feedbackMessage.value = UiFeedback("Medical timeout started for ${player.name}.")
+    }
+
+    fun onSaveLiveScoreSnapshot(rawScore: String) {
+        val detail = uiState.value.detail ?: return
+        val matchId = detail.matchId ?: return
+        if (detail.status != CourtStatus.IN_PROGRESS) return
+        val score = normalizeLiveScore(rawScore)
+        if (score.isBlank()) {
+            feedbackMessage.value = UiFeedback("Enter score before saving.")
+            return
+        }
+        viewModelScope.launch {
+            eventLogRepository.logEvent(
+                matchId = matchId,
+                courtId = detail.courtId,
+                kind = MatchEventKind.TIMER,
+                offenderPlayerId = null,
+                message = "SCORE_SNAPSHOT|$score",
+            )
+            feedbackMessage.value = UiFeedback("Live score saved: $score")
+        }
+    }
+
     fun onApplyViolation(offenderPlayerId: Long, category: ViolationCategory, violationName: String) {
         val matchId = uiState.value.detail?.matchId ?: return
         viewModelScope.launch {
@@ -423,6 +472,30 @@ class CourtDetailViewModel @Inject constructor(
         if (!message.startsWith("VIOLATION|")) return null
         val category = message.split("|").getOrNull(1) ?: return null
         return runCatching { ViolationCategory.valueOf(category) }.getOrNull()
+    }
+
+    private fun hasMedicalTimeoutAlreadyUsed(events: List<MatchEvent>, playerId: Long): Boolean {
+        return events.any { event ->
+            event.kind == MatchEventKind.TIMER &&
+                event.message?.startsWith("TIMER|MEDICAL_TIMEOUT|START") == true &&
+                extractPlayerIdFromTimerMessage(event.message) == playerId
+        }
+    }
+
+    private fun extractPlayerIdFromTimerMessage(message: String?): Long? {
+        val value = message
+            ?.split("|")
+            ?.firstOrNull { token -> token.startsWith("playerId=") }
+            ?.substringAfter("=")
+            ?.trim()
+        return value?.toLongOrNull()
+    }
+
+    private fun normalizeLiveScore(raw: String): String {
+        return raw
+            .trim()
+            .replace(Regex("\\s+"), " ")
+            .replace("-", ":")
     }
 
     private companion object {

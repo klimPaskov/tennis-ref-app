@@ -137,12 +137,15 @@ private fun eventTitle(kind: MatchEventKind, message: String?): String {
         MatchEventKind.VIOLATION -> "Violation"
         MatchEventKind.TIMER -> {
             if (message == null) return "Timer"
+            if (message.startsWith("SCORE_SNAPSHOT|")) return "Live Score Saved"
             val parts = message.split("|")
             val timerType = parts.getOrNull(1)?.uppercase().orEmpty()
             val action = parts.getOrNull(2)?.uppercase().orEmpty()
             when {
                 timerType == "WARMUP" && action == "START" -> "Warm-up Started"
                 timerType == "WARMUP" && action == "DONE" -> "Warm-up Ended"
+                timerType == "MEDICAL_TIMEOUT" && action == "START" -> "Medical Timeout Started"
+                timerType == "MEDICAL_TIMEOUT" && action == "DONE" -> "Medical Timeout Ended"
                 else -> "Timer"
             }
         }
@@ -169,14 +172,22 @@ private fun normalizeForComparison(value: String): String {
 }
 
 private fun formatTimerMessage(message: String): String {
+    if (message.startsWith("SCORE_SNAPSHOT|")) {
+        return message.substringAfter("SCORE_SNAPSHOT|").trim()
+    }
     if (!message.startsWith("TIMER|")) return message
     val parts = message.split("|")
     val timerType = parts.getOrNull(1)?.replace('_', ' ')?.lowercase()?.replaceFirstChar { it.uppercase() } ?: "Timer"
     val action = parts.getOrNull(2)?.lowercase() ?: ""
+    val playerName = parts
+        .firstOrNull { token -> token.startsWith("playerName=") }
+        ?.substringAfter("=")
+        ?.trim()
+        ?.ifBlank { null }
     return when (action) {
-        "start" -> "$timerType started"
-        "stop" -> "$timerType stopped"
-        "done" -> "$timerType finished"
+        "start" -> if (playerName != null) "$timerType started for $playerName" else "$timerType started"
+        "stop" -> if (playerName != null) "$timerType stopped for $playerName" else "$timerType stopped"
+        "done" -> if (playerName != null) "$timerType finished for $playerName" else "$timerType finished"
         else -> "$timerType $action".trim()
     }
 }
