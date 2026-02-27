@@ -1823,18 +1823,31 @@ class AppRepository @Inject constructor(
             return concatenatedPair
         }
 
-        val inlineCandidates = mutableListOf<Pair<ParsedEntrant, ParsedEntrant>>()
+        val inlineCandidates = mutableListOf<InlinePairCandidate>()
         cellLines.forEach { line ->
             val inline = extractInlinePair(line.text) ?: return@forEach
             val left = parseEntrant(inline.leftRaw) ?: return@forEach
             val right = parseEntrant(inline.rightRaw) ?: return@forEach
             if (!left.name.equals(right.name, ignoreCase = true)) {
-                inlineCandidates += sanitizeSeedConflict(left, right, inline.leftRaw, inline.rightRaw)
+                val sanitized = sanitizeSeedConflict(left, right, inline.leftRaw, inline.rightRaw)
+                inlineCandidates += InlinePairCandidate(
+                    left = sanitized.first,
+                    right = sanitized.second,
+                    confidence = inlinePairConfidence(
+                        left = sanitized.first,
+                        right = sanitized.second,
+                        leftRaw = inline.leftRaw,
+                        rightRaw = inline.rightRaw,
+                    ),
+                )
             }
         }
         if (inlineCandidates.isNotEmpty()) {
-            return inlineCandidates.minByOrNull { (left, right) ->
-                left.name.split(' ').size + right.name.split(' ').size
+            val best = inlineCandidates.maxWithOrNull(
+                compareBy<InlinePairCandidate>({ it.confidence }, { it.wordCount }),
+            )
+            if (best != null) {
+                return best.left to best.right
             }
         }
 
@@ -1885,7 +1898,7 @@ class AppRepository @Inject constructor(
 
         val markerRegex = Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)\\s*(?:\\[[^\\]]*\\])?")
         val markers = markerRegex.findAll(normalized).toList()
-        if (markers.size < 2) return null
+        if (markers.size != 2) return null
 
         val splitIndex = markers.first().range.last + 1
         val leftRaw = normalized.substring(0, splitIndex).trim()
@@ -1909,8 +1922,24 @@ class AppRepository @Inject constructor(
         val mergedRaw = pair.joinToString(" ") { it.text }.normalizeSpaces().trim()
         val merged = parseEntrant(mergedRaw)
         val single = parseEntrant(primary.text)
+        val firstParsed = parseEntrant(pair[0].text)
+        val secondParsed = parseEntrant(pair[1].text)
+        val bothLookLikeDistinctEntrants =
+            firstParsed != null &&
+                secondParsed != null &&
+                !firstParsed.name.equals(secondParsed.name, ignoreCase = true) &&
+                firstParsed.name.split(' ').size >= 2 &&
+                secondParsed.name.split(' ').size >= 2 &&
+                (firstParsed.countryCode != null || hasCountryMarker(pair[0].text)) &&
+                (secondParsed.countryCode != null || hasCountryMarker(pair[1].text))
+        if (bothLookLikeDistinctEntrants) return primary.text
+
         val mergeLikelySplitEntrant =
-            hasCountryMarker(pair[0].text).xor(hasCountryMarker(pair[1].text)) ||
+            (hasCountryMarker(pair[0].text).xor(hasCountryMarker(pair[1].text)) && (
+                single?.name?.split(' ')?.size == 1 ||
+                    firstParsed?.name?.split(' ')?.size == 1 ||
+                    secondParsed?.name?.split(' ')?.size == 1
+                )) ||
                 (single != null && single.name.split(' ').size == 1)
         return when {
             merged == null -> primary.text
@@ -1988,20 +2017,38 @@ class AppRepository @Inject constructor(
         val grouped = columns.associate { it.name to mutableListOf<OcrLine>() }
         rowLines.forEach { line ->
             val isEntrantLike = isPotentialEntrantLine(line.text) || isVsToken(line.text)
-            val bestColumn = if (isEntrantLike) {
-                columns.minByOrNull { column ->
-                    abs(line.centerX - ((column.leftBoundary + column.rightBoundary) / 2f))
-                }
-            } else {
-                columns.maxByOrNull { column ->
-                    val overlapLeft = maxOf(line.left, column.leftBoundary)
-                    val overlapRight = minOf(line.right, column.rightBoundary)
-                    (overlapRight - overlapLeft).coerceAtLeast(0f)
-                }
+            val nearestByCenter = columns.minByOrNull { column ->
+                abs(line.centerX - ((column.leftBoundary + column.rightBoundary) / 2f))
+            }
+            val bestByOverlap = columns.maxByOrNull { column -> columnOverlapWidth(line, column) }
+            val overlapWidth = bestByOverlap?.let { columnOverlapWidth(line, it) } ?: 0f
+            val lineWidth = (line.right - line.left).coerceAtLeast(1f)
+            val bestColumn = when {
+                !isEntrantLike -> bestByOverlap ?: nearestByCenter
+                bestByOverlap != null && overlapWidth / lineWidth >= 0.28f -> bestByOverlap
+                else -> nearestByCenter
             } ?: return@forEach
+
+            if (isEntrantLike && looksLikeCrossColumnEntrantLine(line, bestColumn)) {
+                return@forEach
+            }
             grouped[bestColumn.name]?.add(line)
         }
         return grouped
+    }
+
+    private fun columnOverlapWidth(line: OcrLine, column: CourtColumnLayout): Float {
+        val overlapLeft = maxOf(line.left, column.leftBoundary)
+        val overlapRight = minOf(line.right, column.rightBoundary)
+        return (overlapRight - overlapLeft).coerceAtLeast(0f)
+    }
+
+    private fun looksLikeCrossColumnEntrantLine(line: OcrLine, column: CourtColumnLayout): Boolean {
+        val columnWidth = (column.rightBoundary - column.leftBoundary).coerceAtLeast(1f)
+        val lineWidth = (line.right - line.left).coerceAtLeast(0f)
+        if (lineWidth <= columnWidth * 1.14f) return false
+        val markerCount = Regex("\\(\\s*[A-Za-z0-9|]{2,6}\\s*\\)").findAll(line.text).count()
+        return markerCount >= 2 && !INLINE_VS_REGEX.containsMatchIn(line.text)
     }
 
     private fun parseCourtName(raw: String): String? {
@@ -2054,6 +2101,35 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private fun inlinePairConfidence(
+        left: ParsedEntrant,
+        right: ParsedEntrant,
+        leftRaw: String,
+        rightRaw: String,
+    ): Int {
+        var score = 0
+        if (hasCountryMarker(leftRaw)) score += 3
+        if (hasCountryMarker(rightRaw)) score += 3
+        if (left.countryCode != null) score += 2
+        if (right.countryCode != null) score += 2
+        if (left.seed != null) score += 1
+        if (right.seed != null) score += 1
+
+        val leftWords = left.name.split(' ').size
+        val rightWords = right.name.split(' ').size
+        score += when (leftWords) {
+            in 2..4 -> 2
+            1 -> -2
+            else -> 0
+        }
+        score += when (rightWords) {
+            in 2..4 -> 2
+            1 -> -2
+            else -> 0
+        }
+        return score
+    }
+
     private fun hasExplicitSeedMarker(raw: String): Boolean {
         if (Regex("\\[(\\d{1,2})\\]").containsMatchIn(raw)) return true
         val paren = Regex("\\((\\d{1,2})\\)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
@@ -2100,11 +2176,11 @@ class AppRepository @Inject constructor(
         }
 
         val words = value.split(' ').filter { it.isNotBlank() }
-        if (words.size > 5) {
+        if (words.size > 7) {
             value = if (takeTail) {
-                words.takeLast(4).joinToString(" ")
+                words.takeLast(6).joinToString(" ")
             } else {
-                words.take(4).joinToString(" ")
+                words.take(6).joinToString(" ")
             }
         }
         return value.normalizeSpaces().trim()
@@ -2260,10 +2336,11 @@ class AppRepository @Inject constructor(
         val filtered = tokens.filter { token ->
             token.any { it.isLetter() } &&
                 token.length > 1 &&
+                !token.equals("AND", ignoreCase = true) &&
                 !token.equals("VS", ignoreCase = true)
         }.toMutableList()
 
-        while (filtered.size >= 3 && isLikelyNoiseNameToken(filtered.last())) {
+        while (filtered.size >= 2 && isLikelyNoiseNameToken(filtered.last())) {
             filtered.removeAt(filtered.lastIndex)
         }
         return filtered
@@ -2272,7 +2349,9 @@ class AppRepository @Inject constructor(
     private fun isLikelyNoiseNameToken(token: String): Boolean {
         val normalized = token.lowercase()
         if (normalized in OCR_NOISE_TOKENS) return true
-        return token.length <= 3 && token.all { it in "IiLlZzSsrR0123456789" }
+        return token.length <= 3 &&
+            token == token.uppercase() &&
+            token.all { it in "IiLlZzSsrR0123456789" }
     }
 
     private fun normalizePersonNameCase(name: String): String {
@@ -2490,6 +2569,7 @@ class AppRepository @Inject constructor(
                 token.isNotBlank() &&
                     token.any { it.isLetter() } &&
                     token.length > 1 &&
+                    !token.equals("AND", ignoreCase = true) &&
                     !tokenMatchesCountry(token, matchedCountry) &&
                     !isLikelySeedArtifactToken(token)
             }
@@ -2758,6 +2838,14 @@ class AppRepository @Inject constructor(
         val rightRaw: String,
     )
 
+    private data class InlinePairCandidate(
+        val left: ParsedEntrant,
+        val right: ParsedEntrant,
+        val confidence: Int,
+    ) {
+        val wordCount: Int get() = left.name.split(' ').size + right.name.split(' ').size
+    }
+
     private data class ParsedEntrantLine(
         val centerY: Float,
         val raw: String,
@@ -2811,7 +2899,7 @@ class AppRepository @Inject constructor(
             "UKR" to "UA",
         )
         val ISO2_CODES = ISO3_TO_ISO2.values.toSet()
-        val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr")
+        val OCR_NOISE_TOKENS = setOf("hii", "hll", "iii", "ii", "iz", "zi", "rs", "sr", "ir", "lr", "la")
     }
 }
 
