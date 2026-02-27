@@ -760,7 +760,7 @@ class AppRepository @Inject constructor(
             // Row 2
             match("Court 2", 2, "Followed By", null, "BSQ",
                 left = entrant("Callum Hooper", "GBR", 3),
-                rightWinnerOf = ref("Court 8", 3)),
+                rightWinnerOf = ref("Court 4", 3)),
             match("Court 3", 2, "Followed By", null, "BSQ",
                 left = entrant("Markas Mazrimas", "LTU", 1),
                 rightWinnerOf = ref("Court 5", 3)),
@@ -846,7 +846,7 @@ class AppRepository @Inject constructor(
             // Row 6
             match("Court 4", 6, "Followed By", null, "BSQ",
                 leftWinnerOf = ref("Court 4", 4),
-                rightWinnerOf = ref("Court 4", 3)),
+                rightWinnerOf = ref("Court 2", 2)),
             match("Court 5", 6, "Followed By", null, "GSQ",
                 leftWinnerOf = ref("Court 8", 2),
                 rightWinnerOf = ref("Court 9", 2)),
