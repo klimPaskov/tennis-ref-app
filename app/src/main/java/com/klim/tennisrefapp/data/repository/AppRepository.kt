@@ -1,6 +1,9 @@
 package com.klim.tennisrefapp.data.repository
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import androidx.room.withTransaction
 import com.klim.tennisrefapp.data.local.AppDatabase
@@ -86,6 +89,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -1579,8 +1583,11 @@ class AppRepository @Inject constructor(
         }
     }
 
-    private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? = withContext(Dispatchers.IO) {
-        recognizeImageText(uri)?.text
+    private suspend fun readOrderOfPlayTextFromImage(uri: Uri): String? {
+        return recognizeImageTextVariants(uri)
+            .maxByOrNull { it.text.text.length }
+            ?.text
+            ?.text
     }
 
     private fun isPdfFile(uri: Uri, mimeType: String): Boolean {
@@ -1596,20 +1603,176 @@ class AppRepository @Inject constructor(
             lower.endsWith(".webp")
     }
 
-    private suspend fun recognizeImageText(uri: Uri): Text? = withContext(Dispatchers.IO) {
-        runCatching {
-            val image = InputImage.fromFilePath(appContext, uri)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            try {
-                Tasks.await(recognizer.process(image))
-            } finally {
-                recognizer.close()
+    private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
+        val candidates = recognizeImageTextVariants(uri)
+            .mapNotNull { variant ->
+                val document = parseOrderOfPlayFromRecognizedText(variant.text) ?: return@mapNotNull null
+                ParsedImageImportCandidate(
+                    document = document,
+                    score = scoreImportedOrderDocument(document),
+                    variantLabel = variant.label,
+                )
             }
-        }.getOrNull()
+        return candidates.maxByOrNull { it.score }?.document
     }
 
-    private suspend fun parseOrderOfPlayFromImage(uri: Uri): ImportedOrderDocument? {
-        val recognized = recognizeImageText(uri) ?: return null
+    private suspend fun recognizeImageTextVariants(uri: Uri): List<RecognizedImageVariant> = withContext(Dispatchers.IO) {
+        val decoded = decodeBitmapFromUri(uri) ?: return@withContext emptyList()
+        val baseBitmap = scaleBitmapIfNeeded(decoded, OCR_BASE_MAX_DIMENSION)
+        val variants = buildOcrBitmapVariants(baseBitmap)
+        if (baseBitmap !== decoded && !decoded.isRecycled) {
+            decoded.recycle()
+        }
+
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        try {
+            variants.mapNotNull { variant ->
+                runCatching {
+                    val image = InputImage.fromBitmap(variant.bitmap, 0)
+                    val text = Tasks.await(recognizer.process(image))
+                    RecognizedImageVariant(label = variant.label, text = text)
+                }.getOrNull()
+            }
+        } finally {
+            recognizer.close()
+            variants.forEach { variant ->
+                if (!variant.bitmap.isRecycled) {
+                    variant.bitmap.recycle()
+                }
+            }
+        }
+    }
+
+    private fun decodeBitmapFromUri(uri: Uri): Bitmap? {
+        val resolver = appContext.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+        } ?: return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        val sampleSize = calculateInSampleSize(
+            width = bounds.outWidth,
+            height = bounds.outHeight,
+            maxDimension = OCR_BASE_MAX_DIMENSION * 2,
+        )
+        val decodeOptions = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inSampleSize = sampleSize
+        }
+        return resolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOptions)
+        }
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
+        var sample = 1
+        while (width / sample > maxDimension || height / sample > maxDimension) {
+            sample *= 2
+        }
+        return sample.coerceAtLeast(1)
+    }
+
+    private fun scaleBitmapIfNeeded(source: Bitmap, maxDimension: Int): Bitmap {
+        val maxSide = maxOf(source.width, source.height)
+        if (maxSide <= maxDimension) return source
+        val scale = maxDimension.toFloat() / maxSide.toFloat()
+        val targetWidth = (source.width * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (source.height * scale).roundToInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+    }
+
+    private fun scaleBitmapByFactor(source: Bitmap, factor: Float, maxDimension: Int): Bitmap {
+        if (factor <= 1f) return source.copy(Bitmap.Config.ARGB_8888, false)
+        val targetWidth = (source.width * factor).roundToInt().coerceAtLeast(1)
+        val targetHeight = (source.height * factor).roundToInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+        return scaleBitmapIfNeeded(scaled, maxDimension)
+    }
+
+    private fun buildOcrBitmapVariants(source: Bitmap): List<OcrBitmapVariant> {
+        val contrast = toGrayscaleContrastBitmap(source, contrast = 1.35f, brightness = 8)
+        val threshold = toGrayscaleContrastBitmap(
+            source = source,
+            contrast = 1.5f,
+            brightness = 10,
+            threshold = computeOtsuThreshold(source),
+        )
+        val upscaled = scaleBitmapByFactor(source, factor = 1.35f, maxDimension = OCR_VARIANT_MAX_DIMENSION)
+        val upscaledContrast = toGrayscaleContrastBitmap(upscaled, contrast = 1.32f, brightness = 10)
+        if (!upscaled.isRecycled) {
+            upscaled.recycle()
+        }
+        return listOf(
+            OcrBitmapVariant(label = "original", bitmap = source.copy(Bitmap.Config.ARGB_8888, false)),
+            OcrBitmapVariant(label = "contrast", bitmap = contrast),
+            OcrBitmapVariant(label = "threshold", bitmap = threshold),
+            OcrBitmapVariant(label = "upscaled_contrast", bitmap = upscaledContrast),
+        )
+    }
+
+    private fun toGrayscaleContrastBitmap(
+        source: Bitmap,
+        contrast: Float,
+        brightness: Int,
+        threshold: Int? = null,
+    ): Bitmap {
+        val width = source.width
+        val height = source.height
+        val input = IntArray(width * height)
+        val output = IntArray(width * height)
+        source.getPixels(input, 0, width, 0, 0, width, height)
+
+        for (index in input.indices) {
+            val color = input[index]
+            val gray = ((Color.red(color) * 77) + (Color.green(color) * 150) + (Color.blue(color) * 29)) shr 8
+            val adjusted = ((gray - 128f) * contrast + 128f + brightness).roundToInt().coerceIn(0, 255)
+            val finalGray = threshold?.let { cut -> if (adjusted >= cut) 255 else 0 } ?: adjusted
+            output[index] = Color.argb(255, finalGray, finalGray, finalGray)
+        }
+
+        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
+            setPixels(output, 0, width, 0, 0, width, height)
+        }
+    }
+
+    private fun computeOtsuThreshold(source: Bitmap): Int {
+        val histogram = IntArray(256)
+        val pixels = IntArray(source.width * source.height)
+        source.getPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
+        pixels.forEach { color ->
+            val gray = ((Color.red(color) * 77) + (Color.green(color) * 150) + (Color.blue(color) * 29)) shr 8
+            histogram[gray]++
+        }
+
+        val total = pixels.size.toFloat().coerceAtLeast(1f)
+        var sum = 0f
+        for (value in histogram.indices) {
+            sum += value.toFloat() * histogram[value]
+        }
+
+        var sumBackground = 0f
+        var weightBackground = 0f
+        var maxVariance = -1f
+        var threshold = 128
+        for (candidate in histogram.indices) {
+            weightBackground += histogram[candidate]
+            if (weightBackground <= 0f) continue
+            val weightForeground = total - weightBackground
+            if (weightForeground <= 0f) break
+            sumBackground += candidate.toFloat() * histogram[candidate]
+            val meanBackground = sumBackground / weightBackground
+            val meanForeground = (sum - sumBackground) / weightForeground
+            val variance = weightBackground * weightForeground * (meanBackground - meanForeground) * (meanBackground - meanForeground)
+            if (variance > maxVariance) {
+                maxVariance = variance
+                threshold = candidate
+            }
+        }
+        return threshold.coerceIn(80, 200)
+    }
+
+    private fun parseOrderOfPlayFromRecognizedText(recognized: Text): ImportedOrderDocument? {
         val ocrLines = extractOcrLines(recognized)
         if (ocrLines.isEmpty()) return null
 
@@ -1672,6 +1835,55 @@ class AppRepository @Inject constructor(
             courts = columns.map { it.name },
             matches = matches,
         )
+    }
+
+    private fun scoreImportedOrderDocument(document: ImportedOrderDocument): Int {
+        if (document.matches.isEmpty()) return Int.MIN_VALUE
+        val coveredCourts = document.matches.map { it.courtName }.distinct().size
+        val expectedCourts = document.courts.size.coerceAtLeast(1)
+        val coverageScore = (coveredCourts * 100) / expectedCourts
+        val matchScore = document.matches.size * 14
+        val scheduleScore = document.matches.sumOf { importedMatchScheduleScore(it.scheduleLabel) }
+        val entrantScore = document.matches.sumOf { importedEntrantScore(it.left) + importedEntrantScore(it.right) }
+        val continuityScore = document.matches
+            .groupBy { it.courtName }
+            .values
+            .sumOf { matches ->
+                matches.map { it.order }
+                    .distinct()
+                    .sorted()
+                    .zipWithNext()
+                    .count { (first, second) -> second == first + 1 } * 5
+            }
+        return coverageScore + matchScore + scheduleScore + entrantScore + continuityScore
+    }
+
+    private fun importedEntrantScore(entrant: ParsedEntrant): Int {
+        val words = entrant.name.split(' ').filter { it.isNotBlank() }
+        val wordScore = when (words.size) {
+            in 2..4 -> 10
+            1 -> -10
+            else -> 2
+        }
+        val countryScore = if (entrant.countryCode != null) 6 else -2
+        val seedScore = if (entrant.seed != null) 2 else 0
+        val tokenScore = words.fold(0) { acc, word ->
+            acc + when {
+                word.length <= 1 -> -4
+                word.length in 2..18 -> 1
+                else -> -2
+            }
+        }
+        return wordScore + countryScore + seedScore + tokenScore
+    }
+
+    private fun importedMatchScheduleScore(label: String): Int {
+        return when {
+            label.contains("Not Before", ignoreCase = true) -> 6
+            label.contains("Starting at", ignoreCase = true) -> 4
+            label.contains("Followed By", ignoreCase = true) -> 3
+            else -> 0
+        }
     }
 
     private fun extractOcrLines(recognized: Text): List<OcrLine> {
@@ -2885,9 +3097,27 @@ class AppRepository @Inject constructor(
         val matches: List<ImportedOrderMatch>,
     )
 
+    private data class OcrBitmapVariant(
+        val label: String,
+        val bitmap: Bitmap,
+    )
+
+    private data class RecognizedImageVariant(
+        val label: String,
+        val text: Text,
+    )
+
+    private data class ParsedImageImportCandidate(
+        val document: ImportedOrderDocument,
+        val score: Int,
+        val variantLabel: String,
+    )
+
     private companion object {
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
+        const val OCR_BASE_MAX_DIMENSION = 2600
+        const val OCR_VARIANT_MAX_DIMENSION = 3200
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = mapOf(
             "BEL" to "BE",
