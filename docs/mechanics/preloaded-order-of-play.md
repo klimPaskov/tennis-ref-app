@@ -6,9 +6,9 @@ Provide a deterministic import path that does not depend on OCR quality.
 ## Behavior
 - Home screen has `Load Preloaded Order Of Play`.
 - Preloaded list is dynamic:
-  - built-in `Example` (tracked in source),
-  - local asset presets from `app/src/main/assets/local_presets/*.json` (gitignored),
+  - locally bootstrapped `Fictional Qualifiers` preset (boys + girls qualification draws),
   - locally saved presets created from imports (`Save Current As Preset`).
+- Presets are editable from the load dialog and can be deleted with confirmation.
 - Tapping a preset clears current tournament data and loads the selected dataset.
 - Presets include courts, players, country codes, seeds, and scheduled matches.
 - Schedule labels are explicit (`Starting at 09:00`, `Followed By`, `Not Before 11:30`).
@@ -22,7 +22,7 @@ OCR import can still misread names, seeds, or times on some files/images.
 This preloaded option gives a reliable fallback flow for demos and real use when file OCR is unstable.
 
 ## Privacy / Git
-- Local presets are intentionally excluded from Git with `.gitignore`.
+- Presets are stored in app-internal storage (`files/saved_presets`) and are not tracked by Git.
 - This keeps personal tournament presets usable on phone builds without publishing them on GitHub.
 
 ## Main files
