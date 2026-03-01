@@ -24,3 +24,6 @@ Thumbs.db
 orderofplay.*
 AGENTS.md
 SPEC.md
+
+# Local-only presets bundled for personal phone builds
+app/src/main/assets/local_presets/
