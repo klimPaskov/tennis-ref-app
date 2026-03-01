@@ -5,7 +5,7 @@
 - Actions:
   - `Courts`: opens courts.
   - `New Order Of Play`: opens file picker and imports order-of-play data from file.
-  - `Load Preloaded Order Of Play`: opens a chooser dialog for local presets (including `Fictional Qualifiers`).
+  - `Load Preloaded Order Of Play`: opens a chooser dialog for local presets (including `Fictional Qualifiers` and local asset presets).
   - Presets in this dialog can be deleted with a confirmation prompt.
   - `Save Current As Preset`: stores the currently imported order as a local preset on-device.
   - `Reload`: asks for confirmation, then reloads the currently loaded order source from scratch (clears all match progress).
