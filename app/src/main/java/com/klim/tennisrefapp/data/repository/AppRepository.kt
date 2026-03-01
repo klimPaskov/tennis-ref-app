@@ -333,7 +333,7 @@ class AppRepository @Inject constructor(
                 replaced
             }
             RELOAD_SOURCE_PRELOADED -> {
-                val preloadId = source.value ?: DEFAULT_PRELOADED_ID
+                val preloadId = source.value ?: listPreloadedOrderOfPlayOptions().firstOrNull()?.id ?: return false
                 loadPreloadedOrderOfPlay(preloadId)
             }
             else -> {
@@ -357,19 +357,14 @@ class AppRepository @Inject constructor(
     }
 
     override suspend fun listPreloadedOrderOfPlayOptions(): List<PreloadedOrderOfPlayOption> = withContext(Dispatchers.IO) {
-        val custom = listCustomPresetDescriptors()
-        buildList {
-            add(PreloadedOrderOfPlayOption(id = DEFAULT_PRELOADED_ID, label = "Example"))
-            addAll(custom)
-        }
+        ensureInitialFictionalPresetIfNeeded()
+        listCustomPresetDescriptors()
     }
 
     override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
         val normalizedId = preloadId.trim()
-        val imported = when {
-            normalizedId.equals(DEFAULT_PRELOADED_ID, ignoreCase = true) -> verifiedPreloadedOrderOfPlay()
-            else -> loadCustomPresetDocument(normalizedId)
-        } ?: return false
+        if (isPresetDeleted(normalizedId)) return false
+        val imported = loadCustomPresetDocument(normalizedId) ?: return false
 
         val loaded = replaceTournamentWithImportedOrder(imported)
         if (loaded) {
@@ -383,7 +378,29 @@ class AppRepository @Inject constructor(
         val trimmed = name.trim()
         if (trimmed.isBlank()) return@withContext false
         val imported = loadCachedCurrentOrderDocument() ?: return@withContext false
-        saveCustomPresetDocument(trimmed, imported)
+        saveCustomPresetDocument(trimmed, imported).also { saved ->
+            if (saved) {
+                clearPresetDeleted(normalizePresetId(trimmed))
+            }
+        }
+    }
+
+    override suspend fun deletePreloadedOrderOfPlay(preloadId: String): Boolean = withContext(Dispatchers.IO) {
+        val presetId = normalizePresetId(preloadId) ?: return@withContext false
+        val existed = readPresetDocumentFromInternal(presetId) != null
+        if (!existed) return@withContext false
+
+        val deleted = runCatching {
+            File(customPresetDirectory(), "$presetId.json").delete()
+        }.getOrDefault(false)
+        if (!deleted) return@withContext false
+
+        markPresetDeleted(presetId)
+        val source = loadReloadSource()
+        if (source.type == RELOAD_SOURCE_PRELOADED && source.value.equals(presetId, ignoreCase = true)) {
+            saveReloadSource(sourceType = RELOAD_SOURCE_SEED, sourceValue = null)
+        }
+        true
     }
 
     private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
@@ -669,36 +686,81 @@ class AppRepository @Inject constructor(
         return deserializeImportedOrderDocument(raw)
     }
 
+    private fun ensureInitialFictionalPresetIfNeeded() {
+        val prefs = appContext.getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_FICTIONAL_PRESET_BOOTSTRAPPED, false)) return
+        if (
+            saveCustomPresetDocument(
+                name = "Fictional Qualifiers",
+                imported = fictionalPreloadedOrderOfPlay(),
+                forcedPresetId = DEFAULT_PRELOADED_ID,
+            )
+        ) {
+            clearPresetDeleted(DEFAULT_PRELOADED_ID)
+            prefs.edit().putBoolean(KEY_FICTIONAL_PRESET_BOOTSTRAPPED, true).apply()
+        }
+    }
+
+    private fun deletedPresetIdSet(): Set<String> {
+        return appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_DELETED_PRESET_IDS, emptySet())
+            ?.toSet()
+            .orEmpty()
+    }
+
+    private fun isPresetDeleted(presetId: String): Boolean {
+        val normalized = normalizePresetId(presetId) ?: return false
+        return normalized in deletedPresetIdSet()
+    }
+
+    private fun markPresetDeleted(presetId: String) {
+        val normalized = normalizePresetId(presetId) ?: return
+        val updated = deletedPresetIdSet().toMutableSet().apply { add(normalized) }
+        appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(KEY_DELETED_PRESET_IDS, updated)
+            .apply()
+    }
+
+    private fun clearPresetDeleted(presetId: String?) {
+        val normalized = normalizePresetId(presetId) ?: return
+        val updated = deletedPresetIdSet().toMutableSet().apply { remove(normalized) }
+        appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(KEY_DELETED_PRESET_IDS, updated)
+            .apply()
+    }
+
     private fun listCustomPresetDescriptors(): List<PreloadedOrderOfPlayOption> {
-        val optionsById = linkedMapOf<String, PreloadedOrderOfPlayOption>()
-
-        listAssetPresetIds().forEach { presetId ->
-            val document = readPresetDocumentFromAssets(presetId) ?: return@forEach
-            optionsById[presetId] = PreloadedOrderOfPlayOption(
-                id = presetId,
-                label = document.tournamentName.ifBlank { presetId },
-            )
-        }
-
-        listInternalPresetIds().forEach { presetId ->
-            val document = readPresetDocumentFromInternal(presetId) ?: return@forEach
-            optionsById[presetId] = PreloadedOrderOfPlayOption(
-                id = presetId,
-                label = document.tournamentName.ifBlank { presetId },
-            )
-        }
-
-        return optionsById.values.sortedBy { it.label.lowercase() }
+        val hiddenIds = deletedPresetIdSet()
+        return listInternalPresetIds()
+            .filter { presetId -> presetId !in hiddenIds }
+            .mapNotNull { presetId ->
+                val document = readPresetDocumentFromInternal(presetId) ?: return@mapNotNull null
+                PreloadedOrderOfPlayOption(
+                    id = presetId,
+                    label = document.tournamentName.ifBlank { presetId },
+                    isDeletable = true,
+                )
+            }
+            .sortedBy { it.label.lowercase() }
     }
 
     private fun loadCustomPresetDocument(preloadId: String): ImportedOrderDocument? {
         val presetId = normalizePresetId(preloadId) ?: return null
+        if (isPresetDeleted(presetId)) return null
         return readPresetDocumentFromInternal(presetId)
-            ?: readPresetDocumentFromAssets(presetId)
     }
 
-    private fun saveCustomPresetDocument(name: String, imported: ImportedOrderDocument): Boolean {
-        val presetId = normalizePresetId(name) ?: return false
+    private fun saveCustomPresetDocument(
+        name: String,
+        imported: ImportedOrderDocument,
+        forcedPresetId: String? = null,
+    ): Boolean {
+        val presetId = normalizePresetId(forcedPresetId ?: name) ?: return false
         val document = imported.copy(tournamentName = name.trim())
         val payload = serializeImportedOrderDocument(imported = document)
         val file = File(customPresetDirectory(), "$presetId.json")
@@ -709,17 +771,6 @@ class AppRepository @Inject constructor(
         }.getOrDefault(false)
     }
 
-    private fun listAssetPresetIds(): List<String> {
-        val fileNames = runCatching {
-            appContext.assets.list(LOCAL_PRESET_ASSET_DIR)?.toList().orEmpty()
-        }.getOrDefault(emptyList())
-        return fileNames
-            .filter { it.endsWith(".json", ignoreCase = true) }
-            .map { it.removeSuffix(".json") }
-            .mapNotNull(::normalizePresetId)
-            .distinct()
-    }
-
     private fun listInternalPresetIds(): List<String> {
         val files = customPresetDirectory().listFiles().orEmpty()
         return files
@@ -727,13 +778,6 @@ class AppRepository @Inject constructor(
             .map { it.name.removeSuffix(".json") }
             .mapNotNull(::normalizePresetId)
             .distinct()
-    }
-
-    private fun readPresetDocumentFromAssets(presetId: String): ImportedOrderDocument? {
-        val raw = runCatching {
-            appContext.assets.open("$LOCAL_PRESET_ASSET_DIR/$presetId.json").bufferedReader().use { it.readText() }
-        }.getOrNull() ?: return null
-        return deserializeImportedOrderDocument(raw)
     }
 
     private fun readPresetDocumentFromInternal(presetId: String): ImportedOrderDocument? {
@@ -750,7 +794,10 @@ class AppRepository @Inject constructor(
     private fun normalizePresetId(raw: String?): String? {
         val value = raw.orEmpty().trim()
         if (value.isBlank()) return null
-        val normalized = value.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_')
+        val normalized = value
+            .lowercase()
+            .replace(Regex("[^a-z0-9._-]"), "_")
+            .trim('_')
         return normalized.takeIf { it.isNotBlank() }
     }
 
@@ -887,75 +934,91 @@ class AppRepository @Inject constructor(
         }
     }
 
-    private fun verifiedPreloadedOrderOfPlay(): ImportedOrderDocument {
+    private fun fictionalPreloadedOrderOfPlay(): ImportedOrderDocument {
         fun entrant(name: String, country: String, seed: Int? = null): ParsedEntrant {
             return ParsedEntrant(name = name, countryCode = country, seed = seed)
         }
-        val start0900 = toTodayMillis("09:00")
-        val notBefore1130 = toTodayMillis("11:30")
-        fun schedule(order: Int): Pair<String, Long?> {
-            return when (order) {
-                1 -> "Starting at 09:00" to start0900
-                3 -> "Not Before 11:30" to notBefore1130
-                else -> "Followed By" to null
-            }
-        }
+        fun ref(court: String, order: Int): ImportedMatchRef = ImportedMatchRef(courtName = court, order = order)
         fun match(
             court: String,
             order: Int,
-            left: ParsedEntrant,
-            right: ParsedEntrant,
-            scheduleOverride: Pair<String, Long?>? = null,
+            scheduleLabel: String,
+            manualNotBefore: Long?,
+            eventCode: String,
+            left: ParsedEntrant? = null,
+            right: ParsedEntrant? = null,
+            leftWinnerOf: ImportedMatchRef? = null,
+            rightWinnerOf: ImportedMatchRef? = null,
         ): ImportedOrderMatch {
-            val (label, manual) = scheduleOverride ?: schedule(order)
             return ImportedOrderMatch(
                 courtName = court,
                 order = order,
                 left = left,
                 right = right,
-                scheduleLabel = label,
-                manualNotBefore = manual,
+                scheduleLabel = scheduleLabel,
+                manualNotBefore = manualNotBefore,
+                eventCode = eventCode,
+                leftWinnerOf = leftWinnerOf,
+                rightWinnerOf = rightWinnerOf,
             )
         }
 
+        val start0900 = toTodayMillis("09:00")
+        val start1030 = toTodayMillis("10:30")
+        val boysFinalAt1300 = toTodayMillis("13:00")
+        val girlsFinalAt1500 = toTodayMillis("15:00")
+
         val matches = listOf(
-            match("Court 2", 1, entrant("Yiyuan Su", "CHN"), entrant("Vincent Fletcher", "GBR", 5)),
-            match("Court 2", 2, entrant("Hanna Vanni", "FIN", 7), entrant("Vera Morozova", "EST")),
-            match("Court 2", 3, entrant("Elizabete Marta Hamitova", "LAT"), entrant("Margarita Novik", "EST")),
-            match("Court 2", 4, entrant("Filip Hesser", "SWE", 6), entrant("Andreas Kuum", "EST")),
-            match("Court 3", 1, entrant("Sonia Sirenius", "FIN"), entrant("Vladislava Lescinska", "LAT", 8)),
-            match("Court 3", 2, entrant("Kamilla Cernousova", "LAT"), entrant("Marie Benmouyal", "DEN", 5)),
-            match("Court 3", 3, entrant("Mark Griaziutin Tverskoj", "LTU"), entrant("Alex Tuomolin", "FIN")),
-            match("Court 3", 4, entrant("Gabriel Maciel Araujo Pyndt", "DEN"), entrant("Nick Mertgens", "GER")),
-            match("Court 4", 1, entrant("Elizaveta Anikina", "EST", 1), entrant("Sofia Ioana Voicu", "BEL")),
-            match("Court 4", 2, entrant("Svit Suljic", "SLO"), entrant("Ken Ink", "EST", 2)),
-            match("Court 4", 3, entrant("Ewangelina Penkevych", "POL"), entrant("Nora Olivia Adamson", "EST", 3)),
-            match("Court 4", 4, entrant("Daria Podlipskaya", "EST"), entrant("Elin Kalmus", "EST")),
-            match("Court 5", 1, entrant("Sonja Wedenski", "SWE"), entrant("Varvara Trifonova", "EST")),
-            match("Court 5", 2, entrant("Margarita Aktuganova", "ISR", 6), entrant("Ksenia Semjonova", "EST")),
-            match("Court 5", 3, entrant("Nikita Smirnov", "EST"), entrant("Moritz Glauser", "LIE", 4)),
-            match("Court 5", 4, entrant("Luukas Raudkivi", "EST"), entrant("Jan Werblinski", "POL")),
-            match("Court 6", 1, entrant("Asia Basiletti", "ITA"), entrant("Aleksandra Maksimova", "EST")),
-            match("Court 6", 2, entrant("Julia Kolodziejska", "POL", 4), entrant("Viktoria Sidorenkova", "EST")),
-            match("Court 6", 3, entrant("Vlad Secara", "ROU", 7), entrant("Rasmus Stalmeister", "EST")),
-            match("Court 6", 4, entrant("Nand Vandepoele", "BEL", 3), entrant("Egert Trave", "EST")),
-            match("Court 7", 1, entrant("Edwin Averjanov", "EST", 1), entrant("Jan Sykora", "CZE")),
-            match("Court 7", 2, entrant("Liisa Marii Pohjala", "EST"), entrant("Grace Bernstein", "SWE")),
-            match("Court 7", 3, entrant("Eriks Valeinis", "LAT"), entrant("Mads Bruhn Aaby", "DEN")),
-            match("Court 7", 4, entrant("Kirils Sokolovs", "LAT"), entrant("Verneri Riikonen", "FIN")),
-            match("Court 8", 1, entrant("Markus Valtson", "EST"), entrant("Asger Sorensen", "DEN")),
-            match("Court 8", 2, entrant("Elizaveta Bryakina", "EST"), entrant("Luana Kappeler", "SUI")),
-            match("Court 8", 3, entrant("Maryna Levadna", "UKR"), entrant("Marie Johanna Lapimaa", "EST")),
-            match("Court 8", 4, entrant("Hitoshi Shirabe", "JPN"), entrant("Mark Gregor Toniste", "EST")),
-            match("Court 9", 1, entrant("Isak Bossfall", "SWE"), entrant("Armands Aire", "LAT")),
-            match("Court 9", 2, entrant("Olesja Demcenkova", "LAT"), entrant("Alexandra Nedyalkova", "EST")),
-            match("Court 9", 3, entrant("Daria Barsukov", "GER"), entrant("Anna Azarova", "LAT", 2)),
-            match("Court 9", 4, entrant("Mingus Zack Hansen", "DEN"), entrant("Hugo Pawel Rytelewski", "POL", 8)),
+            // Boys qualification draw (BSQ)
+            match("Court 1", 1, "Starting at 09:00", start0900, "BSQ",
+                left = entrant("Ethan Novak", "CZE", 1),
+                right = entrant("Liam Berg", "SWE")),
+            match("Court 2", 1, "Starting at 09:00", start0900, "BSQ",
+                left = entrant("Noah Petrov", "BUL", 4),
+                right = entrant("Hugo Marin", "ESP")),
+            match("Court 3", 1, "Starting at 09:00", start0900, "BSQ",
+                left = entrant("Arjun Mehta", "IND", 2),
+                right = entrant("Leo Tanaka", "JPN")),
+            match("Court 4", 1, "Starting at 09:00", start0900, "BSQ",
+                left = entrant("Mikkel Ostergaard", "DEN", 3),
+                right = entrant("Matteo Ricci", "ITA")),
+            match("Court 1", 2, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 1", 1),
+                rightWinnerOf = ref("Court 2", 1)),
+            match("Court 2", 2, "Followed By", null, "BSQ",
+                leftWinnerOf = ref("Court 3", 1),
+                rightWinnerOf = ref("Court 4", 1)),
+            match("Court 1", 3, "Not Before 13:00", boysFinalAt1300, "BSQ",
+                leftWinnerOf = ref("Court 1", 2),
+                rightWinnerOf = ref("Court 2", 2)),
+
+            // Girls qualification draw (GSQ)
+            match("Court 1", 4, "Starting at 10:30", start1030, "GSQ",
+                left = entrant("Mila Kostova", "BUL", 1),
+                right = entrant("Anna-Lee Fischer", "GER")),
+            match("Court 2", 4, "Starting at 10:30", start1030, "GSQ",
+                left = entrant("Sofia Lindholm", "SWE", 4),
+                right = entrant("Emma Duarte", "POR")),
+            match("Court 3", 4, "Starting at 10:30", start1030, "GSQ",
+                left = entrant("Nora Sato", "JPN", 2),
+                right = entrant("Alina Voss", "GER")),
+            match("Court 4", 4, "Starting at 10:30", start1030, "GSQ",
+                left = entrant("Petra Novak", "CZE", 3),
+                right = entrant("Lucia Marin", "ESP")),
+            match("Court 1", 5, "Followed By", null, "GSQ",
+                leftWinnerOf = ref("Court 1", 4),
+                rightWinnerOf = ref("Court 2", 4)),
+            match("Court 2", 5, "Followed By", null, "GSQ",
+                leftWinnerOf = ref("Court 3", 4),
+                rightWinnerOf = ref("Court 4", 4)),
+            match("Court 1", 6, "Not Before 15:00", girlsFinalAt1500, "GSQ",
+                leftWinnerOf = ref("Court 1", 5),
+                rightWinnerOf = ref("Court 2", 5)),
         )
 
         return ImportedOrderDocument(
-            tournamentName = "J60 Tallinn (Verified Preloaded)",
-            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
+            tournamentName = "Fictional Qualifiers",
+            courts = listOf("Court 1", "Court 2", "Court 3", "Court 4"),
             matches = matches,
         )
     }
@@ -4379,7 +4442,7 @@ class AppRepository @Inject constructor(
     )
 
     private companion object {
-        const val DEFAULT_PRELOADED_ID = "example"
+        const val DEFAULT_PRELOADED_ID = "fictional_qualifiers"
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
         const val ROW_RECOVERY_MARGIN = 20f
@@ -4390,10 +4453,11 @@ class AppRepository @Inject constructor(
         const val KEY_RELOAD_SOURCE_TYPE = "type"
         const val KEY_RELOAD_SOURCE_VALUE = "value"
         const val KEY_LAST_IMPORTED_ORDER_JSON = "last_imported_order_json"
+        const val KEY_FICTIONAL_PRESET_BOOTSTRAPPED = "fictional_preset_bootstrapped"
+        const val KEY_DELETED_PRESET_IDS = "deleted_preloaded_ids"
         const val RELOAD_SOURCE_SEED = "seed"
         const val RELOAD_SOURCE_FILE = "file"
         const val RELOAD_SOURCE_PRELOADED = "preloaded"
-        const val LOCAL_PRESET_ASSET_DIR = "local_presets"
         const val LOCAL_PRESET_INTERNAL_DIR = "saved_presets"
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = CountryFlags.iso3ToIso2Map
