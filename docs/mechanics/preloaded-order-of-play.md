@@ -6,7 +6,7 @@ Provide a deterministic import path that does not depend on OCR quality.
 ## Behavior
 - Home screen has `Load Preloaded Order Of Play`.
 - Preloaded list is dynamic:
-  - locally bootstrapped `Fictional Qualifiers` preset (boys + girls qualification draws),
+  - locally bootstrapped `Example` preset (boys + girls qualification draws),
   - local asset presets from `app/src/main/assets/local_presets/*.json` (gitignored),
   - locally saved presets created from imports (`Save Current As Preset`).
 - Presets are editable from the load dialog and can be deleted with confirmation.

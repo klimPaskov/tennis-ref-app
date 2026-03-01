@@ -357,7 +357,7 @@ class AppRepository @Inject constructor(
     }
 
     override suspend fun listPreloadedOrderOfPlayOptions(): List<PreloadedOrderOfPlayOption> = withContext(Dispatchers.IO) {
-        ensureInitialFictionalPresetIfNeeded()
+        ensureInitialExamplePresetIfNeeded()
         listCustomPresetDescriptors()
     }
 
@@ -690,19 +690,31 @@ class AppRepository @Inject constructor(
         return deserializeImportedOrderDocument(raw)
     }
 
-    private fun ensureInitialFictionalPresetIfNeeded() {
+    private fun ensureInitialExamplePresetIfNeeded() {
         val prefs = appContext.getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(KEY_FICTIONAL_PRESET_BOOTSTRAPPED, false)) return
-        if (
+        if (prefs.getBoolean(KEY_EXAMPLE_PRESET_BOOTSTRAPPED, false)) return
+
+        val migrated = readPresetDocumentFromInternal(LEGACY_PRELOADED_ID)?.let { legacy ->
+            val copied = saveCustomPresetDocument(
+                name = "Example",
+                imported = legacy,
+                forcedPresetId = DEFAULT_PRELOADED_ID,
+            )
+            if (copied) {
+                runCatching { File(customPresetDirectory(), "$LEGACY_PRELOADED_ID.json").delete() }
+            }
+            copied
+        } ?: false
+
+        if (!migrated) {
             saveCustomPresetDocument(
-                name = "Fictional Qualifiers",
+                name = "Example",
                 imported = fictionalPreloadedOrderOfPlay(),
                 forcedPresetId = DEFAULT_PRELOADED_ID,
             )
-        ) {
-            clearPresetDeleted(DEFAULT_PRELOADED_ID)
-            prefs.edit().putBoolean(KEY_FICTIONAL_PRESET_BOOTSTRAPPED, true).apply()
         }
+        clearPresetDeleted(DEFAULT_PRELOADED_ID)
+        prefs.edit().putBoolean(KEY_EXAMPLE_PRESET_BOOTSTRAPPED, true).apply()
     }
 
     private fun deletedPresetIdSet(): Set<String> {
@@ -1054,7 +1066,7 @@ class AppRepository @Inject constructor(
         )
 
         return ImportedOrderDocument(
-            tournamentName = "Fictional Qualifiers",
+            tournamentName = "Example",
             courts = listOf("Court 1", "Court 2", "Court 3", "Court 4"),
             matches = matches,
         )
@@ -4479,7 +4491,8 @@ class AppRepository @Inject constructor(
     )
 
     private companion object {
-        const val DEFAULT_PRELOADED_ID = "fictional_qualifiers"
+        const val DEFAULT_PRELOADED_ID = "example"
+        const val LEGACY_PRELOADED_ID = "fictional_qualifiers"
         const val DEFAULT_REST_MINUTES = 30
         const val REST_PROMPT_MIN_MATCH_MINUTES = 60
         const val ROW_RECOVERY_MARGIN = 20f
@@ -4490,7 +4503,7 @@ class AppRepository @Inject constructor(
         const val KEY_RELOAD_SOURCE_TYPE = "type"
         const val KEY_RELOAD_SOURCE_VALUE = "value"
         const val KEY_LAST_IMPORTED_ORDER_JSON = "last_imported_order_json"
-        const val KEY_FICTIONAL_PRESET_BOOTSTRAPPED = "fictional_preset_bootstrapped"
+        const val KEY_EXAMPLE_PRESET_BOOTSTRAPPED = "example_preset_bootstrapped"
         const val KEY_DELETED_PRESET_IDS = "deleted_preloaded_ids"
         const val RELOAD_SOURCE_SEED = "seed"
         const val RELOAD_SOURCE_FILE = "file"
