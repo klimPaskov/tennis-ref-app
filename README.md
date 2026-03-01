@@ -84,5 +84,4 @@ For doubles, both players constrain availability. For unresolved slots, only kno
 - If parsing fails, the app keeps current data and shows an error message.
 
 ## Project Docs
-- Contributor guide: `AGENTS.md`
 - Mechanics details: `docs/mechanics/`
