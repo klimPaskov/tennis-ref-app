@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -74,6 +75,7 @@ fun HomeRoute(
         },
         onReloadCurrent = viewModel::onReloadCurrentOrderOfPlay,
         onLoadPreloaded = viewModel::onLoadPreloadedOrderOfPlay,
+        onSaveCurrentAsPreset = viewModel::onSaveCurrentAsPreset,
         onPlayers = onPlayers,
         onHistory = onHistory,
         onDraws = onDraws,
@@ -90,6 +92,7 @@ private fun HomeScreen(
     onNewOrderOfPlay: () -> Unit,
     onReloadCurrent: () -> Unit,
     onLoadPreloaded: (String) -> Unit,
+    onSaveCurrentAsPreset: (String) -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
     onDraws: () -> Unit,
@@ -98,6 +101,8 @@ private fun HomeScreen(
 ) {
     var showPreloadedDialog by remember { mutableStateOf(false) }
     var showReloadConfirmation by remember { mutableStateOf(false) }
+    var showSavePresetDialog by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -144,6 +149,13 @@ private fun HomeScreen(
                 enabled = !uiState.isReloading,
             ) {
                 Text(if (uiState.isReloading) "Loading..." else "Load Preloaded Order Of Play")
+            }
+            OutlinedButton(
+                onClick = { showSavePresetDialog = true },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                enabled = !uiState.isSavingPreset && !uiState.isReloading,
+            ) {
+                Text(if (uiState.isSavingPreset) "Saving..." else "Save Current As Preset")
             }
             OutlinedButton(
                 onClick = { showReloadConfirmation = true },
@@ -214,6 +226,43 @@ private fun HomeScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (showSavePresetDialog) {
+        AlertDialog(
+            onDismissRequest = { showSavePresetDialog = false },
+            title = { Text("Save Preset") },
+            text = {
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    label = { Text("Preset Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSaveCurrentAsPreset(presetName)
+                        presetName = ""
+                        showSavePresetDialog = false
+                    },
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        presetName = ""
+                        showSavePresetDialog = false
+                    },
+                ) {
+                    Text("Cancel")
+                }
+            },
         )
     }
 }

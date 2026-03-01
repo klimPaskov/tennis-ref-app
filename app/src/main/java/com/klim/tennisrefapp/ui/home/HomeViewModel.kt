@@ -15,20 +15,17 @@ import kotlinx.coroutines.launch
 
 data class HomeUiState(
     val isReloading: Boolean = false,
+    val isSavingPreset: Boolean = false,
     val message: String? = null,
     val hasDraws: Boolean = false,
-    val preloadedOptions: List<PreloadedOrderOption> = DEFAULT_PRELOADED_OPTIONS,
+    val preloadedOptions: List<PreloadedOrderOption> = listOf(
+        PreloadedOrderOption(id = "example", label = "Example"),
+    ),
 )
 
 data class PreloadedOrderOption(
     val id: String,
     val label: String,
-)
-
-private val DEFAULT_PRELOADED_OPTIONS = listOf(
-    PreloadedOrderOption(id = "02.03.2026", label = "02.03.2026"),
-    PreloadedOrderOption(id = "28.02.2026", label = "28.02.2026"),
-    PreloadedOrderOption(id = "example", label = "Example"),
 )
 
 @HiltViewModel
@@ -46,6 +43,7 @@ class HomeViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(hasDraws = boards.isNotEmpty())
             }
         }
+        loadPreloadedOptions()
     }
 
     fun onOrderOfPlaySelected(uriString: String?) {
@@ -95,10 +93,11 @@ class HomeViewModel @Inject constructor(
             if (loaded) {
                 timerManager.clearAllTimers()
             }
+            loadPreloadedOptions()
             _uiState.value = _uiState.value.copy(
                 isReloading = false,
                 message = if (loaded) {
-                    "Loaded verified preloaded order of play."
+                    "Loaded preloaded order of play."
                 } else {
                     "Could not load preloaded order of play."
                 },
@@ -106,7 +105,41 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun onSaveCurrentAsPreset(rawName: String) {
+        val name = rawName.trim()
+        if (name.isBlank()) {
+            _uiState.value = _uiState.value.copy(message = "Preset name is required.")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isSavingPreset = true, message = null)
+            val saved = tournamentRepository.saveCurrentOrderOfPlayAsPreset(name)
+            loadPreloadedOptions()
+            _uiState.value = _uiState.value.copy(
+                isSavingPreset = false,
+                message = if (saved) {
+                    "Preset saved locally."
+                } else {
+                    "Could not save preset."
+                },
+            )
+        }
+    }
+
     fun clearMessage() {
         _uiState.value = _uiState.value.copy(message = null)
+    }
+
+    private fun loadPreloadedOptions() {
+        viewModelScope.launch {
+            val options = tournamentRepository.listPreloadedOrderOfPlayOptions()
+                .map { option ->
+                    PreloadedOrderOption(
+                        id = option.id,
+                        label = option.label,
+                    )
+                }
+            _uiState.value = _uiState.value.copy(preloadedOptions = options)
+        }
     }
 }

@@ -63,6 +63,7 @@ import com.klim.tennisrefapp.domain.repository.ScheduledMatchTiming
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.domain.repository.PlayerInsightsRepository
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
+import com.klim.tennisrefapp.domain.repository.PreloadedOrderOfPlayOption
 import com.klim.tennisrefapp.domain.repository.SlotRepository
 import com.klim.tennisrefapp.domain.repository.ApplyViolationResult
 import com.klim.tennisrefapp.domain.repository.EndMatchResult
@@ -92,6 +93,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -347,21 +351,39 @@ class AppRepository @Inject constructor(
         val replaced = replaceTournamentWithImportedOrder(imported)
         if (replaced) {
             saveReloadSource(sourceType = RELOAD_SOURCE_FILE, sourceValue = uriString)
+            cacheCurrentOrderDocument(imported)
         }
         return replaced
     }
 
-    override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
-        val loaded = when (preloadId.lowercase()) {
-            "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
-            "28.02.2026" -> replaceTournamentWithImportedOrder(preloadedOrderOfPlay20260228())
-            "02.03.2026" -> replaceTournamentWithImportedOrder(preloadedOrderOfPlay20260302())
-            else -> false
+    override suspend fun listPreloadedOrderOfPlayOptions(): List<PreloadedOrderOfPlayOption> = withContext(Dispatchers.IO) {
+        val custom = listCustomPresetDescriptors()
+        buildList {
+            add(PreloadedOrderOfPlayOption(id = DEFAULT_PRELOADED_ID, label = "Example"))
+            addAll(custom)
         }
+    }
+
+    override suspend fun loadPreloadedOrderOfPlay(preloadId: String): Boolean {
+        val normalizedId = preloadId.trim()
+        val imported = when {
+            normalizedId.equals(DEFAULT_PRELOADED_ID, ignoreCase = true) -> verifiedPreloadedOrderOfPlay()
+            else -> loadCustomPresetDocument(normalizedId)
+        } ?: return false
+
+        val loaded = replaceTournamentWithImportedOrder(imported)
         if (loaded) {
-            saveReloadSource(sourceType = RELOAD_SOURCE_PRELOADED, sourceValue = preloadId.lowercase())
+            saveReloadSource(sourceType = RELOAD_SOURCE_PRELOADED, sourceValue = normalizedId)
+            cacheCurrentOrderDocument(imported)
         }
         return loaded
+    }
+
+    override suspend fun saveCurrentOrderOfPlayAsPreset(name: String): Boolean = withContext(Dispatchers.IO) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return@withContext false
+        val imported = loadCachedCurrentOrderDocument() ?: return@withContext false
+        saveCustomPresetDocument(trimmed, imported)
     }
 
     private suspend fun replaceTournamentWithImportedOrder(imported: ImportedOrderDocument): Boolean {
@@ -630,6 +652,241 @@ class AppRepository @Inject constructor(
             .apply()
     }
 
+    private fun cacheCurrentOrderDocument(imported: ImportedOrderDocument) {
+        val payload = serializeImportedOrderDocument(imported = imported)
+        appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_IMPORTED_ORDER_JSON, payload)
+            .apply()
+    }
+
+    private fun loadCachedCurrentOrderDocument(): ImportedOrderDocument? {
+        val raw = appContext
+            .getSharedPreferences(RELOAD_PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_IMPORTED_ORDER_JSON, null)
+            ?: return null
+        return deserializeImportedOrderDocument(raw)
+    }
+
+    private fun listCustomPresetDescriptors(): List<PreloadedOrderOfPlayOption> {
+        val optionsById = linkedMapOf<String, PreloadedOrderOfPlayOption>()
+
+        listAssetPresetIds().forEach { presetId ->
+            val document = readPresetDocumentFromAssets(presetId) ?: return@forEach
+            optionsById[presetId] = PreloadedOrderOfPlayOption(
+                id = presetId,
+                label = document.tournamentName.ifBlank { presetId },
+            )
+        }
+
+        listInternalPresetIds().forEach { presetId ->
+            val document = readPresetDocumentFromInternal(presetId) ?: return@forEach
+            optionsById[presetId] = PreloadedOrderOfPlayOption(
+                id = presetId,
+                label = document.tournamentName.ifBlank { presetId },
+            )
+        }
+
+        return optionsById.values.sortedBy { it.label.lowercase() }
+    }
+
+    private fun loadCustomPresetDocument(preloadId: String): ImportedOrderDocument? {
+        val presetId = normalizePresetId(preloadId) ?: return null
+        return readPresetDocumentFromInternal(presetId)
+            ?: readPresetDocumentFromAssets(presetId)
+    }
+
+    private fun saveCustomPresetDocument(name: String, imported: ImportedOrderDocument): Boolean {
+        val presetId = normalizePresetId(name) ?: return false
+        val document = imported.copy(tournamentName = name.trim())
+        val payload = serializeImportedOrderDocument(imported = document)
+        val file = File(customPresetDirectory(), "$presetId.json")
+        return runCatching {
+            file.parentFile?.mkdirs()
+            file.writeText(payload)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun listAssetPresetIds(): List<String> {
+        val fileNames = runCatching {
+            appContext.assets.list(LOCAL_PRESET_ASSET_DIR)?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+        return fileNames
+            .filter { it.endsWith(".json", ignoreCase = true) }
+            .map { it.removeSuffix(".json") }
+            .mapNotNull(::normalizePresetId)
+            .distinct()
+    }
+
+    private fun listInternalPresetIds(): List<String> {
+        val files = customPresetDirectory().listFiles().orEmpty()
+        return files
+            .filter { it.isFile && it.name.endsWith(".json", ignoreCase = true) }
+            .map { it.name.removeSuffix(".json") }
+            .mapNotNull(::normalizePresetId)
+            .distinct()
+    }
+
+    private fun readPresetDocumentFromAssets(presetId: String): ImportedOrderDocument? {
+        val raw = runCatching {
+            appContext.assets.open("$LOCAL_PRESET_ASSET_DIR/$presetId.json").bufferedReader().use { it.readText() }
+        }.getOrNull() ?: return null
+        return deserializeImportedOrderDocument(raw)
+    }
+
+    private fun readPresetDocumentFromInternal(presetId: String): ImportedOrderDocument? {
+        val file = File(customPresetDirectory(), "$presetId.json")
+        if (!file.exists()) return null
+        val raw = runCatching { file.readText() }.getOrNull() ?: return null
+        return deserializeImportedOrderDocument(raw)
+    }
+
+    private fun customPresetDirectory(): File {
+        return File(appContext.filesDir, LOCAL_PRESET_INTERNAL_DIR)
+    }
+
+    private fun normalizePresetId(raw: String?): String? {
+        val value = raw.orEmpty().trim()
+        if (value.isBlank()) return null
+        val normalized = value.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('_')
+        return normalized.takeIf { it.isNotBlank() }
+    }
+
+    private fun serializeImportedOrderDocument(imported: ImportedOrderDocument): String {
+        val root = JSONObject().apply {
+            put("tournamentName", imported.tournamentName)
+            put("courts", JSONArray(imported.courts))
+            put("matches", JSONArray().apply {
+                imported.matches.forEach { match ->
+                    put(
+                        JSONObject().apply {
+                            put("courtName", match.courtName)
+                            put("order", match.order)
+                            put("scheduleLabel", match.scheduleLabel)
+                            match.manualNotBefore?.let { put("manualTime", formatTime(it)) }
+                            if (!match.eventCode.isNullOrBlank()) {
+                                put("eventCode", match.eventCode)
+                            }
+                            if (match.left != null) {
+                                put("left", serializeParsedEntrant(match.left))
+                            }
+                            if (match.right != null) {
+                                put("right", serializeParsedEntrant(match.right))
+                            }
+                            if (match.leftWinnerOf != null) {
+                                put("leftWinnerOf", serializeMatchRef(match.leftWinnerOf))
+                            }
+                            if (match.rightWinnerOf != null) {
+                                put("rightWinnerOf", serializeMatchRef(match.rightWinnerOf))
+                            }
+                            if (match.leftIsBye) put("leftIsBye", true)
+                            if (match.rightIsBye) put("rightIsBye", true)
+                        },
+                    )
+                }
+            })
+        }
+        return root.toString()
+    }
+
+    private fun serializeParsedEntrant(entrant: ParsedEntrant): JSONObject {
+        return JSONObject().apply {
+            put("name", entrant.name)
+            entrant.countryCode?.let { put("countryCode", it) }
+            entrant.seed?.let { put("seed", it) }
+            if (entrant.memberNames.isNotEmpty()) {
+                put("memberNames", JSONArray(entrant.memberNames))
+            }
+        }
+    }
+
+    private fun serializeMatchRef(ref: ImportedMatchRef): JSONObject {
+        return JSONObject().apply {
+            put("courtName", ref.courtName)
+            put("order", ref.order)
+        }
+    }
+
+    private fun deserializeImportedOrderDocument(raw: String): ImportedOrderDocument? {
+        return runCatching {
+            val root = JSONObject(raw)
+            val tournamentName = root.optString("tournamentName").ifBlank { "Imported Order Of Play" }
+            val courts = root.optJSONArray("courts")
+                ?.toStringList()
+                ?.map(String::trim)
+                ?.filter(String::isNotBlank)
+                .orEmpty()
+
+            val matchArray = root.optJSONArray("matches") ?: return@runCatching null
+            val matches = buildList {
+                for (index in 0 until matchArray.length()) {
+                    val matchJson = matchArray.optJSONObject(index) ?: continue
+                    val courtName = matchJson.optString("courtName").trim()
+                    if (courtName.isBlank()) continue
+                    val order = matchJson.optInt("order", -1)
+                    if (order <= 0) continue
+                    val scheduleLabel = matchJson.optString("scheduleLabel").ifBlank { "Followed By" }
+                    val explicitTime = matchJson.optString("manualTime", "").ifBlank { null }
+                    val manualNotBefore = when {
+                        explicitTime != null -> toTodayMillis(explicitTime)
+                        else -> extractTime(scheduleLabel)?.let(::toTodayMillis)
+                    }
+                    add(
+                        ImportedOrderMatch(
+                            courtName = courtName,
+                            order = order,
+                            left = matchJson.optJSONObject("left")?.toParsedEntrant(),
+                            right = matchJson.optJSONObject("right")?.toParsedEntrant(),
+                            scheduleLabel = scheduleLabel,
+                            manualNotBefore = manualNotBefore,
+                            eventCode = matchJson.optString("eventCode", "").ifBlank { null },
+                            leftWinnerOf = matchJson.optJSONObject("leftWinnerOf")?.toImportedMatchRef(),
+                            rightWinnerOf = matchJson.optJSONObject("rightWinnerOf")?.toImportedMatchRef(),
+                            leftIsBye = matchJson.optBoolean("leftIsBye", false),
+                            rightIsBye = matchJson.optBoolean("rightIsBye", false),
+                        ),
+                    )
+                }
+            }
+
+            if (matches.isEmpty()) return@runCatching null
+            ImportedOrderDocument(
+                tournamentName = tournamentName,
+                courts = if (courts.isNotEmpty()) courts else matches.map { it.courtName }.distinct(),
+                matches = matches,
+            )
+        }.getOrNull()
+    }
+
+    private fun JSONObject.toParsedEntrant(): ParsedEntrant? {
+        val name = optString("name").trim()
+        if (name.isBlank()) return null
+        return ParsedEntrant(
+            name = name,
+            countryCode = optString("countryCode", "").ifBlank { null },
+            seed = optInt("seed", -1).takeIf { it > 0 },
+            memberNames = optJSONArray("memberNames")?.toStringList().orEmpty(),
+        )
+    }
+
+    private fun JSONObject.toImportedMatchRef(): ImportedMatchRef? {
+        val courtName = optString("courtName").trim()
+        val order = optInt("order", -1)
+        if (courtName.isBlank() || order <= 0) return null
+        return ImportedMatchRef(courtName = courtName, order = order)
+    }
+
+    private fun JSONArray.toStringList(): List<String> {
+        return buildList {
+            for (index in 0 until length()) {
+                val value = optString(index).trim()
+                if (value.isNotBlank()) add(value)
+            }
+        }
+    }
+
     private fun verifiedPreloadedOrderOfPlay(): ImportedOrderDocument {
         fun entrant(name: String, country: String, seed: Int? = null): ParsedEntrant {
             return ParsedEntrant(name = name, countryCode = country, seed = seed)
@@ -699,264 +956,6 @@ class AppRepository @Inject constructor(
         return ImportedOrderDocument(
             tournamentName = "J60 Tallinn (Verified Preloaded)",
             courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
-            matches = matches,
-        )
-    }
-
-    private fun preloadedOrderOfPlay20260228(): ImportedOrderDocument {
-        fun entrant(name: String, country: String, seed: Int? = null): ParsedEntrant {
-            return ParsedEntrant(name = name, countryCode = country, seed = seed)
-        }
-        fun ref(court: String, order: Int): ImportedMatchRef = ImportedMatchRef(courtName = court, order = order)
-        fun match(
-            court: String,
-            order: Int,
-            scheduleLabel: String,
-            manualNotBefore: Long?,
-            eventCode: String,
-            left: ParsedEntrant? = null,
-            right: ParsedEntrant? = null,
-            leftWinnerOf: ImportedMatchRef? = null,
-            rightWinnerOf: ImportedMatchRef? = null,
-        ): ImportedOrderMatch {
-            return ImportedOrderMatch(
-                courtName = court,
-                order = order,
-                left = left,
-                right = right,
-                scheduleLabel = scheduleLabel,
-                manualNotBefore = manualNotBefore,
-                eventCode = eventCode,
-                leftWinnerOf = leftWinnerOf,
-                rightWinnerOf = rightWinnerOf,
-            )
-        }
-
-        val notBefore1500 = toTodayMillis("15:00")
-        val start1000 = toTodayMillis("10:00")
-        val notBefore1200 = toTodayMillis("12:00")
-        val notBefore1430 = toTodayMillis("14:30")
-
-        val matches = listOf(
-            // Row 1
-            match("Court 2", 1, "Not Before 15:00", notBefore1500, "GSQ",
-                left = entrant("Elizaveta Bryakina", "EST", 2),
-                rightWinnerOf = ref("Court 6", 2)),
-            match("Court 3", 1, "Not Before 15:00", notBefore1500, "GSQ",
-                left = entrant("Lisette Leppik", "EST", 1),
-                rightWinnerOf = ref("Court 8", 2)),
-            match("Court 4", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Guste Maliutoryte", "LTU", 4),
-                right = entrant("Ivetta Serova", "EST")),
-            match("Court 5", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Ella-Maria Vosu", "EST"),
-                right = entrant("Amanda Nicoli", "FIN")),
-            match("Court 6", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Meta Petkute", "LTU"),
-                right = entrant("Krete Visnapuu", "EST")),
-            match("Court 7", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Zoe Kammandel", "GER"),
-                right = entrant("Arsineh Kazanjian", "EST")),
-            match("Court 8", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Doris Audova", "EST"),
-                right = entrant("Siiri Metsaeranta", "FIN", 5)),
-            match("Court 9", 1, "Starting at 10:00", start1000, "GSQ",
-                left = entrant("Sofia Traverso", "EST"),
-                right = entrant("Harriet Podra", "EST")),
-
-            // Row 2
-            match("Court 2", 2, "Followed By", null, "BSQ",
-                left = entrant("Callum Hooper", "GBR", 3),
-                rightWinnerOf = ref("Court 4", 3)),
-            match("Court 3", 2, "Followed By", null, "BSQ",
-                left = entrant("Markas Mazrimas", "LTU", 1),
-                rightWinnerOf = ref("Court 5", 3)),
-            match("Court 4", 2, "Followed By", null, "GSQ",
-                left = entrant("Amelia Maljugina", "EST"),
-                right = entrant("Emily Stoian", "USA")),
-            match("Court 5", 2, "Followed By", null, "GSQ",
-                left = entrant("Pilar Aurora Rim", "EST"),
-                right = entrant("Simona Sepp", "EST", 8)),
-            match("Court 6", 2, "Followed By", null, "GSQ",
-                left = entrant("Katlin Tonts", "EST"),
-                right = entrant("Ona Kleidisaite", "LTU")),
-            match("Court 7", 2, "Followed By", null, "GSQ",
-                left = entrant("Marta Vellerand", "EST"),
-                right = entrant("Ieva Sikliutaite", "LTU", 6)),
-            match("Court 8", 2, "Followed By", null, "GSQ",
-                left = entrant("Henriette Jarv", "EST"),
-                right = entrant("Alisa Lokk", "EST")),
-            match("Court 9", 2, "Followed By", null, "GSQ",
-                left = entrant("Mariana Nitu", "MDA", 3),
-                right = entrant("Kristel Eva Torkina", "EST")),
-
-            // Row 3
-            match("Court 4", 3, "Not Before 12:00", notBefore1200, "BSQ",
-                left = entrant("Leo Kurtilia", "FIN"),
-                right = entrant("Hugo Narmont", "EST", 8)),
-            match("Court 5", 3, "Not Before 12:00", notBefore1200, "BSQ",
-                left = entrant("Andreas Kuum", "EST"),
-                right = entrant("Jekabs Stikuts", "LAT")),
-            match("Court 6", 3, "Not Before 12:00", notBefore1200, "BSQ",
-                left = entrant("Kristjan Simon Hannus", "EST"),
-                right = entrant("Stanislaw Zaranski", "POL")),
-            match("Court 7", 3, "Not Before 12:00", notBefore1200, "BSQ",
-                left = entrant("Arvi Kauhanen", "FIN"),
-                right = entrant("Robin Rait Rikberg", "EST", 5)),
-            match("Court 8", 3, "Not Before 12:00", notBefore1200, "BSQ",
-                left = entrant("Evan Lainurm", "EST"),
-                right = entrant("Felix Standertskjold-Nordenstam", "FIN")),
-            match("Court 9", 3, "Not Before 12:00", notBefore1200, "GSQ",
-                left = entrant("Eliza Mangule", "LAT"),
-                right = entrant("Marie Roomussaar", "EST")),
-
-            // Row 4
-            match("Court 4", 4, "Followed By", null, "BSQ",
-                left = entrant("Otto Herman Pikk", "EST"),
-                right = entrant("Tom Barcia", "ITA")),
-            match("Court 5", 4, "Followed By", null, "GSQ",
-                left = entrant("Eva Laanots", "EST"),
-                right = entrant("Annika Alifin", "FIN", 7)),
-            match("Court 6", 4, "Followed By", null, "BSQ",
-                left = entrant("Hugo Thor Teiv", "EST"),
-                right = entrant("Richard Hiemann", "GER")),
-            match("Court 7", 4, "Followed By", null, "BSQ",
-                left = entrant("Marats Apens", "LAT"),
-                right = entrant("Joel Nylund", "FIN")),
-            match("Court 8", 4, "Followed By", null, "BSQ",
-                left = entrant("Euan Greenslade", "GBR"),
-                right = entrant("Arthur de Dampierre", "FIN")),
-            match("Court 9", 4, "Followed By", null, "BSQ",
-                left = entrant("Alexander Mononen", "FIN"),
-                right = entrant("Kristo Vellerand", "EST")),
-
-            // Row 5
-            match("Court 4", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 6", 1),
-                rightWinnerOf = ref("Court 5", 4)),
-            match("Court 5", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 9", 3),
-                rightWinnerOf = ref("Court 8", 1)),
-            match("Court 6", 5, "Not Before 14:30", notBefore1430, "BSQ",
-                left = entrant("Johann Juergen Hueherson", "EST"),
-                right = entrant("Samuel Tammi", "FIN", 6)),
-            match("Court 7", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 9", 2),
-                rightWinnerOf = ref("Court 9", 1)),
-            match("Court 8", 5, "Not Before 14:30", notBefore1430, "BSQ",
-                left = entrant("Leonardo Lori", "ITA"),
-                right = entrant("Aaron Kelle", "EST", 7)),
-            match("Court 9", 5, "Not Before 14:30", notBefore1430, "GSQ",
-                leftWinnerOf = ref("Court 7", 1),
-                rightWinnerOf = ref("Court 7", 2)),
-
-            // Row 6
-            match("Court 4", 6, "Followed By", null, "BSQ",
-                leftWinnerOf = ref("Court 4", 4),
-                rightWinnerOf = ref("Court 2", 2)),
-            match("Court 5", 6, "Followed By", null, "GSQ",
-                leftWinnerOf = ref("Court 4", 5),
-                rightWinnerOf = ref("Court 5", 5)),
-            match("Court 6", 6, "Followed By", null, "BSQ",
-                leftWinnerOf = ref("Court 6", 4),
-                rightWinnerOf = ref("Court 6", 5)),
-            match("Court 7", 6, "Followed By", null, "BSQ",
-                left = entrant("Konrad Punger", "EST", 4),
-                rightWinnerOf = ref("Court 7", 4)),
-            match("Court 8", 6, "Followed By", null, "GSQ",
-                leftWinnerOf = ref("Court 7", 5),
-                rightWinnerOf = ref("Court 9", 5)),
-            match("Court 9", 6, "Followed By", null, "BSQ",
-                left = entrant("Juozas Juozapavicius", "LTU", 2),
-                rightWinnerOf = ref("Court 9", 4)),
-
-            // Row 7
-            match("Court 6", 7, "Followed By", null, "BSQ",
-                leftWinnerOf = ref("Court 6", 3),
-                rightWinnerOf = ref("Court 7", 3)),
-            match("Court 8", 7, "Followed By", null, "BSQ",
-                leftWinnerOf = ref("Court 8", 4),
-                rightWinnerOf = ref("Court 8", 5)),
-        )
-
-        return ImportedOrderDocument(
-            tournamentName = "28.02.2026",
-            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
-            matches = matches,
-        )
-    }
-
-    private fun preloadedOrderOfPlay20260302(): ImportedOrderDocument {
-        fun entrant(name: String, country: String?, seed: Int? = null): ParsedEntrant {
-            return ParsedEntrant(name = name, countryCode = country, seed = seed)
-        }
-        fun schedule(order: Int): Pair<String, Long?> {
-            return when (order) {
-                1 -> "Starting at 09:00" to toTodayMillis("09:00")
-                3 -> "Not Before 11:00" to toTodayMillis("11:00")
-                else -> "Followed By" to null
-            }
-        }
-        fun match(
-            court: String,
-            order: Int,
-            eventCode: String,
-            left: ParsedEntrant,
-            right: ParsedEntrant,
-        ): ImportedOrderMatch {
-            val (scheduleLabel, manualNotBefore) = schedule(order)
-            return ImportedOrderMatch(
-                courtName = court,
-                order = order,
-                left = left,
-                right = right,
-                scheduleLabel = scheduleLabel,
-                manualNotBefore = manualNotBefore,
-                eventCode = eventCode,
-            )
-        }
-
-        val matches = listOf(
-            // 1. Starting at 09:00
-            match("Court 2", 1, "BS", entrant("Attila Montague", "USA", 8), entrant("Daniel Rutorov", "GBR")),
-            match("Court 3", 1, "BS", entrant("Dash Green", "GBR"), entrant("Mathias Merve", "FIN")),
-            match("Court 4", 1, "BS", entrant("Kaius Ketola", "FIN"), entrant("Egert Trave", "EST")),
-            match("Court 5", 1, "BS", entrant("Robin Rait Rikberg", "EST"), entrant("Timotej Turoci", "SVK")),
-            match("Court 6", 1, "GS", entrant("Matilda Cabrera Burns", "GBR", 8), entrant("Eleanora Roos", "EST")),
-            match("Court 7", 1, "BS", entrant("Aarne Koskinen", "FIN"), entrant("Filip Cierny", "SVK")),
-            match("Court 8", 1, "BS", entrant("Richard Hiemann", "GER"), entrant("Lukas Smailys", "LTU", 7)),
-
-            // 2. Followed By
-            match("Court 2", 2, "GS", entrant("Sohvi Rantanen", "FIN"), entrant("Miia Mihailov", "EST", 5)),
-            match("Court 3", 2, "BS", entrant("Mick-Angel Anicina-Dzhygurda", "FRA"), entrant("Mingus Zack Hansen", "DEN", 3)),
-            match("Court 4", 2, "BS", entrant("Robin Lucas Sirk", "EST"), entrant("Akseli Finnila", "FIN")),
-            match("Court 5", 2, "GS", entrant("Siiri Metsaeranta", "FIN"), entrant("Sofia Traverso", "EST")),
-            match("Court 6", 2, "GS", entrant("Alisa Lokk", "EST"), entrant("Karina Jonicenoka", "LAT")),
-            match("Court 7", 2, "BS", entrant("Hugo Vahur", "EST"), entrant("Aleksi Hast", "FIN")),
-            match("Court 8", 2, "BS", entrant("Vaclav Barina", "CZE"), entrant("Andreas Kuum", "EST")),
-
-            // 3. Not Before 11:00
-            match("Court 2", 3, "GS", entrant("Smilte Milaseviciute", "LTU"), entrant("Anna Kazinjan", "EST")),
-            match("Court 3", 3, "GS", entrant("Katriin Reinvald", "EST"), entrant("Jiayi Wang", "CHN", 4)),
-            match("Court 4", 3, "GS", entrant("Nora Olivia Adamson", "EST", 1), entrant("Styliani Noutsou", "GRE")),
-            match("Court 5", 3, "GS", entrant("Ella Moeller Wilstrup", "DEN", 3), entrant("Meribel Tamsalu", "EST")),
-            match("Court 6", 3, "GS", entrant("Varvara Trifonova", "EST"), entrant("Gabriela Sulcova", "CZE", 6)),
-            match("Court 7", 3, "GS", entrant("Mia Elise Pink", "EST"), entrant("Marie Johanna Lapimaa", "EST", 2)),
-            match("Court 8", 3, "GS", entrant("Elin Kalmus", "EST"), entrant("Zosia Bielus", "POL")),
-
-            // 4. Followed By
-            match("Court 2", 4, "BS", entrant("Maksymilian Kwiatkowski", "POL", 4), entrant("Hugo Narmont", "EST")),
-            match("Court 3", 4, "GS", entrant("Matilda Wennerstrom", "FIN", 7), entrant("Elizabeth Averjanov", "EST")),
-            match("Court 4", 4, "BS", entrant("David Beckles", "USA", 1), entrant("Marius Luumann", "EST")),
-            match("Court 5", 4, "GS", entrant("Viktoria Sidorenkova", "EST"), entrant("Anna Kotchetkov", "AUT")),
-            match("Court 6", 4, "GS", entrant("Sonia Sirenius", "FIN"), entrant("Stefania Kononova", "EST")),
-            match("Court 7", 4, "GS", entrant("Margarita Novik", "EST"), entrant("Ksenija Kisseljova", "EST")),
-            match("Court 8", 4, "GS", entrant("Simona Sepp", "EST"), entrant("Nadia Stawowiak", "POL")),
-        )
-
-        return ImportedOrderDocument(
-            tournamentName = "02.03.2026",
-            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8"),
             matches = matches,
         )
     }
@@ -4390,9 +4389,12 @@ class AppRepository @Inject constructor(
         const val RELOAD_PREFS_NAME = "order_of_play_reload_source"
         const val KEY_RELOAD_SOURCE_TYPE = "type"
         const val KEY_RELOAD_SOURCE_VALUE = "value"
+        const val KEY_LAST_IMPORTED_ORDER_JSON = "last_imported_order_json"
         const val RELOAD_SOURCE_SEED = "seed"
         const val RELOAD_SOURCE_FILE = "file"
         const val RELOAD_SOURCE_PRELOADED = "preloaded"
+        const val LOCAL_PRESET_ASSET_DIR = "local_presets"
+        const val LOCAL_PRESET_INTERNAL_DIR = "saved_presets"
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = CountryFlags.iso3ToIso2Map
         val ISO2_CODES = CountryFlags.iso2Codes
