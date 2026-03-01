@@ -435,7 +435,7 @@ class CourtTimerManager @Inject constructor(
                         subjectPlayerName = timer.subjectPlayerName,
                     )
                 }
-                scheduleFinishWorker(timer, skipAlert = true)
+                scheduleFinishWorker(timer, skipAlert = false)
             } else {
                 scheduleFinishAlarm(timer)
                 scheduleWarningAlarm(timer)

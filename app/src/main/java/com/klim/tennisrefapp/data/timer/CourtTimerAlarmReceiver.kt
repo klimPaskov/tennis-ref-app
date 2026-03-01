@@ -35,7 +35,7 @@ class CourtTimerAlarmReceiver : BroadcastReceiver() {
         when (action) {
             ACTION_TIMER_WARNING -> {
                 val remainingMillis = (persisted.endAtMillis - now).coerceAtLeast(0L)
-                if (remainingMillis > 65_000L || remainingMillis < 0L) return
+                if (remainingMillis !in 1_000L..65_000L) return
                 if (timerType == CourtTimerType.WARMUP) {
                     CourtTimerAlerts.notifyWarning(
                         context = context,

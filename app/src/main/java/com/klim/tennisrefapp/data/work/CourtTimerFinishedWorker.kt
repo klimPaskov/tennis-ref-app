@@ -41,18 +41,27 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
         val timerType = runCatching { CourtTimerType.valueOf(timerTypeName) }.getOrNull()
             ?: return Result.success()
 
-        val persisted = CourtTimerPersistence.consumeIfMatches(
+        val persisted = CourtTimerPersistence.load(applicationContext, courtId)
+            ?.takeIf { timer ->
+                timer.matchId == matchId &&
+                    timer.timerType == timerType &&
+                    (expectedEndAtMillis <= 0L || kotlin.math.abs(timer.endAtMillis - expectedEndAtMillis) <= 1_500L)
+            }
+            ?: return Result.success()
+
+        val now = System.currentTimeMillis()
+        if (now + 1_500L < persisted.endAtMillis) {
+            return Result.retry()
+        }
+
+        val consumed = CourtTimerPersistence.consumeIfMatches(
             context = applicationContext,
             courtId = courtId,
             matchId = matchId,
             timerType = timerType,
-            expectedEndAtMillis = expectedEndAtMillis,
+            expectedEndAtMillis = persisted.endAtMillis,
+            toleranceMillis = 10_000L,
         ) ?: return Result.success()
-
-        val now = System.currentTimeMillis()
-        if (now + 1_500L < persisted.endAtMillis) {
-            return Result.success()
-        }
 
         CourtTimerAlerts.cancelWarning(applicationContext, courtId)
         if (!skipAlert) {
@@ -69,17 +78,17 @@ class CourtTimerFinishedWorker @AssistedInject constructor(
                 matchId = matchId,
                 courtId = courtId,
                 kind = MatchEventKind.TIMER,
-                offenderPlayerId = subjectPlayerId ?: persisted.subjectPlayerId,
+                offenderPlayerId = subjectPlayerId ?: consumed.subjectPlayerId,
                 message = buildString {
                     append("TIMER|")
                     append(timerType.name)
                     append("|DONE")
-                    val playerId = subjectPlayerId ?: persisted.subjectPlayerId
+                    val playerId = subjectPlayerId ?: consumed.subjectPlayerId
                     if (playerId != null) {
                         append("|playerId=")
                         append(playerId)
                     }
-                    val playerName = subjectPlayerName ?: persisted.subjectPlayerName
+                    val playerName = subjectPlayerName ?: consumed.subjectPlayerName
                     if (!playerName.isNullOrBlank()) {
                         append("|playerName=")
                         append(playerName)
