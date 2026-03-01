@@ -387,13 +387,17 @@ class AppRepository @Inject constructor(
 
     override suspend fun deletePreloadedOrderOfPlay(preloadId: String): Boolean = withContext(Dispatchers.IO) {
         val presetId = normalizePresetId(preloadId) ?: return@withContext false
-        val existed = readPresetDocumentFromInternal(presetId) != null
+        val existedInternal = readPresetDocumentFromInternal(presetId) != null
+        val existedAsset = readPresetDocumentFromAssets(presetId) != null
+        val existed = existedInternal || existedAsset
         if (!existed) return@withContext false
 
-        val deleted = runCatching {
-            File(customPresetDirectory(), "$presetId.json").delete()
-        }.getOrDefault(false)
-        if (!deleted) return@withContext false
+        if (existedInternal) {
+            val deleted = runCatching {
+                File(customPresetDirectory(), "$presetId.json").delete()
+            }.getOrDefault(false)
+            if (!deleted) return@withContext false
+        }
 
         markPresetDeleted(presetId)
         val source = loadReloadSource()
@@ -736,16 +740,30 @@ class AppRepository @Inject constructor(
 
     private fun listCustomPresetDescriptors(): List<PreloadedOrderOfPlayOption> {
         val hiddenIds = deletedPresetIdSet()
-        return listInternalPresetIds()
-            .filter { presetId -> presetId !in hiddenIds }
-            .mapNotNull { presetId ->
-                val document = readPresetDocumentFromInternal(presetId) ?: return@mapNotNull null
-                PreloadedOrderOfPlayOption(
-                    id = presetId,
-                    label = document.tournamentName.ifBlank { presetId },
-                    isDeletable = true,
-                )
-            }
+        val optionsById = linkedMapOf<String, PreloadedOrderOfPlayOption>()
+
+        listAssetPresetIds().forEach { presetId ->
+            if (presetId in hiddenIds) return@forEach
+            val document = readPresetDocumentFromAssets(presetId) ?: return@forEach
+            optionsById[presetId] = PreloadedOrderOfPlayOption(
+                id = presetId,
+                label = document.tournamentName.ifBlank { presetId },
+                isDeletable = true,
+            )
+        }
+
+        listInternalPresetIds().forEach { presetId ->
+            if (presetId in hiddenIds) return@forEach
+            val document = readPresetDocumentFromInternal(presetId) ?: return@forEach
+            optionsById[presetId] = PreloadedOrderOfPlayOption(
+                id = presetId,
+                label = document.tournamentName.ifBlank { presetId },
+                isDeletable = true,
+            )
+        }
+
+        return optionsById
+            .values
             .sortedBy { it.label.lowercase() }
     }
 
@@ -753,6 +771,7 @@ class AppRepository @Inject constructor(
         val presetId = normalizePresetId(preloadId) ?: return null
         if (isPresetDeleted(presetId)) return null
         return readPresetDocumentFromInternal(presetId)
+            ?: readPresetDocumentFromAssets(presetId)
     }
 
     private fun saveCustomPresetDocument(
@@ -771,6 +790,17 @@ class AppRepository @Inject constructor(
         }.getOrDefault(false)
     }
 
+    private fun listAssetPresetIds(): List<String> {
+        val fileNames = runCatching {
+            appContext.assets.list(LOCAL_PRESET_ASSET_DIR)?.toList().orEmpty()
+        }.getOrDefault(emptyList())
+        return fileNames
+            .filter { it.endsWith(".json", ignoreCase = true) }
+            .map { it.removeSuffix(".json") }
+            .mapNotNull(::normalizePresetId)
+            .distinct()
+    }
+
     private fun listInternalPresetIds(): List<String> {
         val files = customPresetDirectory().listFiles().orEmpty()
         return files
@@ -778,6 +808,13 @@ class AppRepository @Inject constructor(
             .map { it.name.removeSuffix(".json") }
             .mapNotNull(::normalizePresetId)
             .distinct()
+    }
+
+    private fun readPresetDocumentFromAssets(presetId: String): ImportedOrderDocument? {
+        val raw = runCatching {
+            appContext.assets.open("$LOCAL_PRESET_ASSET_DIR/$presetId.json").bufferedReader().use { it.readText() }
+        }.getOrNull() ?: return null
+        return deserializeImportedOrderDocument(raw)
     }
 
     private fun readPresetDocumentFromInternal(presetId: String): ImportedOrderDocument? {
@@ -4458,6 +4495,7 @@ class AppRepository @Inject constructor(
         const val RELOAD_SOURCE_SEED = "seed"
         const val RELOAD_SOURCE_FILE = "file"
         const val RELOAD_SOURCE_PRELOADED = "preloaded"
+        const val LOCAL_PRESET_ASSET_DIR = "local_presets"
         const val LOCAL_PRESET_INTERNAL_DIR = "saved_presets"
         val INLINE_VS_REGEX = Regex("(?i)\\b(?:v\\.?[s5$]\\.?|vs\\.?|v\\.)\\b")
         val ISO3_TO_ISO2 = CountryFlags.iso3ToIso2Map
