@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,7 +31,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -44,7 +42,6 @@ import com.klim.tennisrefapp.data.timer.CourtTimerType
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 fun CourtsRoute(
@@ -60,11 +57,6 @@ fun CourtsRoute(
         onHome = onBack,
         onOpenHistory = onOpenHistory,
     )
-}
-
-private enum class CourtPageMode {
-    CURRENT,
-    NEXT,
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -90,8 +82,10 @@ private fun CourtsScreen(
             )
         },
     ) { padding ->
-        val pagerState = rememberPagerState(pageCount = { 2 })
-        val scope = rememberCoroutineScope()
+        val pageCount = courts.maxOfOrNull { row ->
+            row.court.queueEntries.size.coerceAtLeast(1)
+        } ?: 1
+        val pagerState = rememberPagerState(pageCount = { pageCount })
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -99,34 +93,15 @@ private fun CourtsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(
-                    selected = pagerState.currentPage == 0,
-                    onClick = {
-                        if (pagerState.currentPage != 0) {
-                            scope.launch { pagerState.animateScrollToPage(0) }
-                        }
-                    },
-                    label = { Text("Current") },
-                )
-                FilterChip(
-                    selected = pagerState.currentPage == 1,
-                    onClick = {
-                        if (pagerState.currentPage != 1) {
-                            scope.launch { pagerState.animateScrollToPage(1) }
-                        }
-                    },
-                    label = { Text("Next") },
-                )
-            }
+            Text(
+                text = "${pagerState.currentPage + 1}.",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
             ) { page ->
-                val mode = if (page == 0) CourtPageMode.CURRENT else CourtPageMode.NEXT
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 4.dp),
@@ -135,7 +110,7 @@ private fun CourtsScreen(
                     items(courts, key = { it.court.courtId }) { row ->
                         CourtCardItem(
                             row = row,
-                            mode = mode,
+                            pageIndex = page,
                             onTap = { onCourtClick(row.court.courtId) },
                         )
                     }
@@ -148,43 +123,46 @@ private fun CourtsScreen(
 @Composable
 private fun CourtCardItem(
     row: CourtListItemUi,
-    mode: CourtPageMode,
+    pageIndex: Int,
     onTap: () -> Unit,
 ) {
     val nowMillis = rememberTickerNowMillis()
     val court = row.court
+    val entry = court.queueEntries.getOrNull(pageIndex)
+    val status = entry?.status ?: CourtStatus.EMPTY
+    val isActiveEntry = pageIndex == court.activeEntryIndex
+    val isFutureEntry = pageIndex > court.activeEntryIndex
     val timerState = row.activeTimerState
     val timerType = timerState?.timerType
     val warmupExpiredPendingStart = timerState?.timerType == CourtTimerType.WARMUP &&
         timerState.isRunning == false &&
-        court.status == CourtStatus.SCHEDULED
-    val hasAlertHighlight = (timerState?.isRunning == true) || warmupExpiredPendingStart
-    val isNextPage = mode == CourtPageMode.NEXT
-    val statusTint = if (isNextPage) {
+        status == CourtStatus.SCHEDULED
+    val hasAlertHighlight = isActiveEntry && ((timerState?.isRunning == true) || warmupExpiredPendingStart)
+    val statusTint = if (isFutureEntry) {
         MaterialTheme.colorScheme.outline
     } else {
-        statusColor(court.status, hasAlertHighlight)
+        statusColor(status, hasAlertHighlight)
     }
     val cardModifier = Modifier
         .fillMaxWidth()
         .let { modifier ->
-            if (isNextPage) {
+            if (!isActiveEntry || entry?.matchId == null) {
                 modifier
             } else {
                 modifier.clickable(onClick = onTap)
             }
         }
-    val titleColor = if (isNextPage) {
+    val titleColor = if (isFutureEntry) {
         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val subtitleColor = if (isNextPage) {
+    val subtitleColor = if (isFutureEntry) {
         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val matchLabel = if (isNextPage) court.nextMatchLabel ?: "No next match" else court.currentMatchLabel
+    val matchLabel = entry?.matchLabel ?: "No match"
 
     Card(
         modifier = cardModifier,
@@ -207,26 +185,26 @@ private fun CourtCardItem(
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!isNextPage) {
+                if (!isFutureEntry) {
                     Text(
                         text = when {
-                            timerState?.isRunning == true && timerType != null -> timerLabel(timerType)
+                            isActiveEntry && timerState?.isRunning == true && timerType != null -> timerLabel(timerType)
                             warmupExpiredPendingStart -> "Warm-up done"
-                            else -> statusLabel(court.status)
+                            else -> statusLabel(status)
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = statusTint,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                if (!isNextPage && timerState?.isRunning == true) {
+                if (!isFutureEntry && isActiveEntry && timerState?.isRunning == true) {
                     Text(
                         text = formatRemaining(timerState.remainingMillis),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                } else if (!isNextPage && court.status == CourtStatus.IN_PROGRESS) {
-                    court.startedAtMillis?.let { startedAt ->
+                } else if (!isFutureEntry && status == CourtStatus.IN_PROGRESS) {
+                    entry?.startedAtMillis?.let { startedAt ->
                         Text(
                             text = "Elapsed ${formatDuration((nowMillis - startedAt).coerceAtLeast(0L))}",
                             style = MaterialTheme.typography.bodyMedium,
@@ -234,8 +212,8 @@ private fun CourtCardItem(
                         )
                     }
                 } else {
-                    val scheduleLabel = if (isNextPage) court.nextScheduleLabel else court.scheduleLabel
-                    val notBeforeMillis = if (isNextPage) court.nextNotBeforeMillis else court.computedNotBeforeMillis
+                    val scheduleLabel = entry?.scheduleLabel
+                    val notBeforeMillis = entry?.computedNotBeforeMillis
                     when {
                         scheduleLabel?.contains("Followed By", ignoreCase = true) == true -> {
                             Text(
@@ -340,9 +318,30 @@ private fun CourtCardItemPreview() {
                     nextNotBeforeMillis = 1_700_000_600_000,
                     matchId = 42,
                     startedAtMillis = null,
+                    queueEntries = listOf(
+                        com.klim.tennisrefapp.domain.model.CourtQueueEntry(
+                            order = 1,
+                            matchId = 42,
+                            status = CourtStatus.SCHEDULED,
+                            matchLabel = "🇨🇳 Yiyuan Su vs 🇬🇧 Vincent Fletcher",
+                            scheduleLabel = "Starting at 09:00",
+                            computedNotBeforeMillis = 1_700_000_000_000,
+                            startedAtMillis = null,
+                        ),
+                        com.klim.tennisrefapp.domain.model.CourtQueueEntry(
+                            order = 2,
+                            matchId = 43,
+                            status = CourtStatus.SCHEDULED,
+                            matchLabel = "🇫🇮 Hanna Vanni [7] vs 🇪🇪 Vera Morozova",
+                            scheduleLabel = "Not before 11:30",
+                            computedNotBeforeMillis = 1_700_000_600_000,
+                            startedAtMillis = null,
+                        ),
+                    ),
+                    activeEntryIndex = 0,
                 ),
             ),
-            mode = CourtPageMode.CURRENT,
+            pageIndex = 0,
             onTap = {},
         )
     }

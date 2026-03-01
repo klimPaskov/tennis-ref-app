@@ -907,18 +907,39 @@ private fun EditScheduledMatchDialog(
         ?.groupValues
         ?.getOrNull(1)
         ?: detail.computedNotBeforeMillis?.let(::formatTime).orEmpty()
+    val initialHour = normalizeTimeLabel(extractedTime)
+        ?.substringBefore(":")
+        ?.toIntOrNull()
+        ?.coerceIn(0, 23)
+        ?: 9
+    val initialMinute = normalizeTimeLabel(extractedTime)
+        ?.substringAfter(":", "00")
+        ?.toIntOrNull()
+        ?.let { value ->
+            listOf(0, 15, 30, 45).minByOrNull { candidate -> abs(candidate - value) } ?: 0
+        }
+        ?: 0
 
     var selectedLeftPlayerId by remember(detail.matchId) { mutableStateOf(initialLeftId) }
     var selectedRightPlayerId by remember(detail.matchId) { mutableStateOf(initialRightId) }
     var timing by remember(detail.matchId) { mutableStateOf(initialTiming) }
-    var notBeforeLabel by remember(detail.matchId) { mutableStateOf(extractedTime) }
+    var hourText by remember(detail.matchId) { mutableStateOf("%02d".format(initialHour)) }
+    var minuteValue by remember(detail.matchId) { mutableStateOf(initialMinute) }
     var pickingTarget by remember { mutableStateOf<PlayerSelectTarget?>(null) }
+    var playerSearch by remember { mutableStateOf("") }
 
     val playersById = remember(availablePlayers) { availablePlayers.associateBy { it.id } }
     val leftPlayer = selectedLeftPlayerId?.let(playersById::get)
     val rightPlayer = selectedRightPlayerId?.let(playersById::get)
-    val timeValid = timing == ScheduledMatchTiming.FOLLOWED_BY || isValidTimeLabel(notBeforeLabel)
+    val hourValue = hourText.toIntOrNull()
+    val timeValid = timing == ScheduledMatchTiming.FOLLOWED_BY || (hourValue != null && hourValue in 0..23)
     val canSave = leftPlayer != null && rightPlayer != null && leftPlayer.id != rightPlayer.id && timeValid
+    val filteredPlayers = availablePlayers.filter { player ->
+        val query = playerSearch.trim()
+        if (query.isBlank()) return@filter true
+        player.displayName.contains(query, ignoreCase = true) ||
+            player.countryCode?.contains(query, ignoreCase = true) == true
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -953,14 +974,35 @@ private fun EditScheduledMatchDialog(
                     )
                 }
                 if (timing == ScheduledMatchTiming.NOT_BEFORE) {
-                    TextField(
-                        value = notBeforeLabel,
-                        onValueChange = { notBeforeLabel = it.filter { char -> char.isDigit() || char == ':' } },
-                        label = { Text("Time (HH:mm)") },
-                        singleLine = true,
-                        isError = !timeValid,
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextField(
+                            value = hourText,
+                            onValueChange = { value ->
+                                hourText = value.filter { char -> char.isDigit() }.take(2)
+                            },
+                            label = { Text("HH") },
+                            singleLine = true,
+                            isError = !timeValid,
+                            modifier = Modifier.width(88.dp),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                            ),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(0, 15, 30, 45).forEach { minute ->
+                                FilterChip(
+                                    selected = minuteValue == minute,
+                                    onClick = { minuteValue = minute },
+                                    label = { Text("%02d".format(minute)) },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -970,7 +1012,8 @@ private fun EditScheduledMatchDialog(
                     val left = leftPlayer ?: return@Button
                     val right = rightPlayer ?: return@Button
                     val timeValue = if (timing == ScheduledMatchTiming.NOT_BEFORE) {
-                        normalizeTimeLabel(notBeforeLabel)
+                        val hour = hourValue ?: return@Button
+                        "%02d:%02d".format(hour, minuteValue)
                     } else {
                         null
                     }
@@ -992,22 +1035,44 @@ private fun EditScheduledMatchDialog(
             onDismissRequest = { pickingTarget = null },
             title = { Text("Select Player") },
             text = {
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 320.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(availablePlayers, key = { it.id }) { player ->
-                        OutlinedButton(
-                            onClick = {
-                                when (picking) {
-                                    PlayerSelectTarget.LEFT -> selectedLeftPlayerId = player.id
-                                    PlayerSelectTarget.RIGHT -> selectedRightPlayerId = player.id
-                                }
-                                pickingTarget = null
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(displayPlayerSummaryLabel(player))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextField(
+                        value = playerSearch,
+                        onValueChange = { playerSearch = it },
+                        label = { Text("Search player") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(filteredPlayers, key = { it.id }) { player ->
+                            OutlinedButton(
+                                onClick = {
+                                    when (picking) {
+                                        PlayerSelectTarget.LEFT -> {
+                                            val previousLeft = selectedLeftPlayerId
+                                            if (player.id == selectedRightPlayerId) {
+                                                selectedRightPlayerId = previousLeft
+                                            }
+                                            selectedLeftPlayerId = player.id
+                                        }
+                                        PlayerSelectTarget.RIGHT -> {
+                                            val previousRight = selectedRightPlayerId
+                                            if (player.id == selectedLeftPlayerId) {
+                                                selectedLeftPlayerId = previousRight
+                                            }
+                                            selectedRightPlayerId = player.id
+                                        }
+                                    }
+                                    pickingTarget = null
+                                    playerSearch = ""
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(displayPlayerSummaryLabel(player))
+                            }
                         }
                     }
                 }
@@ -2233,15 +2298,6 @@ private fun displayPlayerSummaryLabel(player: PlayerSummary): String {
 private fun displayPlayerNameWithFlag(name: String, countryCode: String?): String {
     val flag = countryCodeToFlagEmoji(countryCode)
     return if (flag != null) "$flag $name" else name
-}
-
-private fun isValidTimeLabel(value: String): Boolean {
-    val normalized = normalizeTimeLabel(value) ?: return false
-    val parts = normalized.split(":")
-    if (parts.size != 2) return false
-    val hour = parts[0].toIntOrNull() ?: return false
-    val minute = parts[1].toIntOrNull() ?: return false
-    return hour in 0..23 && minute in 0..59
 }
 
 private fun normalizeTimeLabel(value: String): String? {

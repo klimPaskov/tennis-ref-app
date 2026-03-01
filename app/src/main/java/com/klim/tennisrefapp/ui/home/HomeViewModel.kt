@@ -3,17 +3,20 @@ package com.klim.tennisrefapp.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.klim.tennisrefapp.data.timer.CourtTimerManager
+import com.klim.tennisrefapp.domain.repository.HistoryRepository
 import com.klim.tennisrefapp.domain.repository.TournamentRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 data class HomeUiState(
     val isReloading: Boolean = false,
     val message: String? = null,
+    val hasDraws: Boolean = false,
     val preloadedOptions: List<PreloadedOrderOption> = DEFAULT_PRELOADED_OPTIONS,
 )
 
@@ -31,10 +34,19 @@ private val DEFAULT_PRELOADED_OPTIONS = listOf(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val tournamentRepository: TournamentRepository,
+    historyRepository: HistoryRepository,
     private val timerManager: CourtTimerManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            historyRepository.observeDrawBoards().collect { boards ->
+                _uiState.value = _uiState.value.copy(hasDraws = boards.isNotEmpty())
+            }
+        }
+    }
 
     fun onOrderOfPlaySelected(uriString: String?) {
         if (uriString.isNullOrBlank()) {
@@ -47,7 +59,7 @@ class HomeViewModel @Inject constructor(
             if (imported) {
                 timerManager.clearAllTimers()
             }
-            _uiState.value = HomeUiState(
+            _uiState.value = _uiState.value.copy(
                 isReloading = false,
                 message = if (imported) {
                     "New order of play loaded from selected file."
@@ -65,7 +77,7 @@ class HomeViewModel @Inject constructor(
             if (reloaded) {
                 timerManager.clearAllTimers()
             }
-            _uiState.value = HomeUiState(
+            _uiState.value = _uiState.value.copy(
                 isReloading = false,
                 message = if (reloaded) {
                     "Reloaded current order of play."
@@ -83,7 +95,7 @@ class HomeViewModel @Inject constructor(
             if (loaded) {
                 timerManager.clearAllTimers()
             }
-            _uiState.value = HomeUiState(
+            _uiState.value = _uiState.value.copy(
                 isReloading = false,
                 message = if (loaded) {
                     "Loaded verified preloaded order of play."

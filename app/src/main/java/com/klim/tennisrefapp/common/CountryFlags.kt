@@ -44,6 +44,7 @@ object CountryFlags {
             mapOf(
                 // Common sports/tennis 3-letter aliases that differ from ISO-3166 alpha-3.
                 "GER" to "DE",
+                "GRE" to "GR",
                 "LAT" to "LV",
                 "SUI" to "CH",
                 "NED" to "NL",

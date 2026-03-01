@@ -36,6 +36,18 @@ data class CourtCard(
     val nextNotBeforeMillis: Long?,
     val matchId: Long?,
     val startedAtMillis: Long?,
+    val queueEntries: List<CourtQueueEntry> = emptyList(),
+    val activeEntryIndex: Int = 0,
+)
+
+data class CourtQueueEntry(
+    val order: Int,
+    val matchId: Long?,
+    val status: CourtStatus,
+    val matchLabel: String,
+    val scheduleLabel: String?,
+    val computedNotBeforeMillis: Long?,
+    val startedAtMillis: Long?,
 )
 
 data class CourtDetail(

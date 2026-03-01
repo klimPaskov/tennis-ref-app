@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -120,7 +121,11 @@ private fun HomeScreen(
             Button(onClick = onHistory, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                 Text("History")
             }
-            Button(onClick = onDraws, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+            Button(
+                onClick = onDraws,
+                enabled = uiState.hasDraws,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) {
                 Text("Draws")
             }
             Button(onClick = onSettings, modifier = Modifier.fillMaxWidth().height(56.dp)) {
@@ -147,6 +152,13 @@ private fun HomeScreen(
             ) {
                 Text(if (uiState.isReloading) "Loading..." else "Reload")
             }
+            Text(
+                text = "Made by Klim",
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .align(Alignment.CenterHorizontally),
+            )
         }
     }
 

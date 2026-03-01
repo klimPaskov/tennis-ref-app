@@ -6,7 +6,6 @@ import java.util.Locale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,34 +13,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 
 @Composable
@@ -50,21 +36,7 @@ fun MatchLogRoute(
     viewModel: MatchLogViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    LaunchedEffect(uiState.message) {
-        val message = uiState.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(message)
-        viewModel.clearMessage()
-    }
-
-    MatchLogScreen(
-        uiState = uiState,
-        onBack = onBack,
-        onEditEvent = viewModel::onEditEvent,
-        onDeleteEvent = viewModel::onDeleteEvent,
-        snackbarHostState = snackbarHostState,
-    )
+    MatchLogScreen(uiState = uiState, onBack = onBack)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,14 +44,8 @@ fun MatchLogRoute(
 private fun MatchLogScreen(
     uiState: MatchLogUiState,
     onBack: () -> Unit,
-    onEditEvent: (Long, String, String) -> Unit,
-    onDeleteEvent: (Long) -> Unit,
-    snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
-    var eventToEdit by remember { mutableStateOf<MatchEvent?>(null) }
-    var eventToDelete by remember { mutableStateOf<MatchEvent?>(null) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -94,7 +60,6 @@ private fun MatchLogScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
         if (detail == null) {
             Column(
@@ -140,31 +105,11 @@ private fun MatchLogScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Row {
-                                IconButton(onClick = { eventToEdit = event }) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Edit,
-                                        contentDescription = "Edit",
-                                    )
-                                }
-                                IconButton(onClick = { eventToDelete = event }) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.DeleteOutline,
-                                        contentDescription = "Delete",
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Text(
                             text = formatTime(event.timestamp),
                             style = MaterialTheme.typography.bodySmall,
@@ -177,68 +122,6 @@ private fun MatchLogScreen(
                 }
             }
         }
-    }
-
-    val editing = eventToEdit
-    if (editing != null) {
-        var timeLabel by remember(editing.id) { mutableStateOf(formatTime(editing.timestamp)) }
-        var messageText by remember(editing.id) { mutableStateOf(editing.message.orEmpty()) }
-        AlertDialog(
-            onDismissRequest = { eventToEdit = null },
-            title = { Text("Edit History Entry") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextField(
-                        value = timeLabel,
-                        onValueChange = { timeLabel = it },
-                        singleLine = true,
-                        label = { Text("Time (HH:mm)") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    TextField(
-                        value = messageText,
-                        onValueChange = { messageText = it },
-                        label = { Text("Message") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onEditEvent(editing.id, timeLabel, messageText)
-                        eventToEdit = null
-                    },
-                ) {
-                    Text("Save")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { eventToEdit = null }) { Text("Cancel") }
-            },
-        )
-    }
-
-    val deleting = eventToDelete
-    if (deleting != null) {
-        AlertDialog(
-            onDismissRequest = { eventToDelete = null },
-            title = { Text("Delete History Entry") },
-            text = { Text("This entry will be permanently removed from match history.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onDeleteEvent(deleting.id)
-                        eventToDelete = null
-                    },
-                ) {
-                    Text("Delete")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { eventToDelete = null }) { Text("Cancel") }
-            },
-        )
     }
 }
 

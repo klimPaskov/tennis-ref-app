@@ -29,6 +29,7 @@ import com.klim.tennisrefapp.data.local.entity.TeamPlayerCrossRefEntity
 import com.klim.tennisrefapp.data.local.entity.TournamentEntity
 import com.klim.tennisrefapp.domain.model.CourtCard
 import com.klim.tennisrefapp.domain.model.CourtDetail
+import com.klim.tennisrefapp.domain.model.CourtQueueEntry
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.CompletedCourtMatch
 import com.klim.tennisrefapp.domain.model.DrawBoard
@@ -1272,6 +1273,18 @@ class AppRepository @Inject constructor(
             val tournament = values[5] as TournamentEntity?
 
             val slotsByMatch = slots.groupBy { it.matchId }
+            val matchById = matches.associateBy { it.id }
+            val eventCodesWithDrawDependencies = slots
+                .asSequence()
+                .filter { slot -> slot.slotType == SlotType.WINNER_OF_MATCH && slot.winnerOfMatchId != null }
+                .mapNotNull { slot ->
+                    val dependentMatch = matchById[slot.matchId] ?: return@mapNotNull null
+                    extractEventCodeFromRoundName(dependentMatch.roundName)
+                }
+                .toSet()
+            if (eventCodesWithDrawDependencies.isEmpty()) {
+                return@combine emptyList()
+            }
             val courtSortById = courts.associate { it.id to it.sortOrder }
             val courtNameById = courts.associate { it.id to it.name }
             val context = BuildContext(
@@ -1316,6 +1329,7 @@ class AppRepository @Inject constructor(
 
             nodes.groupBy { it.eventCode }
                 .toList()
+                .filter { (eventCode, _) -> eventCode in eventCodesWithDrawDependencies }
                 .sortedBy { (eventCode, _) -> eventSortWeight(eventCode) }
                 .map { (eventCode, eventNodes) ->
                     val maxDepth = eventNodes.maxOfOrNull { it.depth } ?: 1
@@ -1405,8 +1419,30 @@ class AppRepository @Inject constructor(
                 courtNamesById = courts.associate { it.id to it.name },
             )
             courts.map { court ->
+                val matchesForCourt = matches
+                    .asSequence()
+                    .filter { match -> match.courtId == court.id }
+                    .sortedWith(
+                        compareBy<MatchEntity> { extractOrderFromRoundName(it.roundName, it.id) }
+                            .thenBy { it.id },
+                    )
+                    .toList()
                 val currentMatch = pickCurrentMatch(court.id, matches)
                 val nextMatch = pickNextScheduledMatch(court.id, matches, currentMatch?.id)
+                val queueEntries = matchesForCourt.map { match ->
+                    CourtQueueEntry(
+                        order = extractOrderFromRoundName(match.roundName, match.id),
+                        matchId = match.id,
+                        status = match.status.toCourtStatus(),
+                        matchLabel = formatMatchLabel(match, context),
+                        scheduleLabel = extractScheduleLabel(match.roundName),
+                        computedNotBeforeMillis = computeNotBefore(match, context),
+                        startedAtMillis = match.startedAt,
+                    )
+                }
+                val activeEntryIndex = currentMatch?.id?.let { currentId ->
+                    queueEntries.indexOfFirst { entry -> entry.matchId == currentId }
+                }?.takeIf { it >= 0 } ?: 0
                 if (currentMatch == null) {
                     CourtCard(
                         courtId = court.id,
@@ -1420,6 +1456,8 @@ class AppRepository @Inject constructor(
                         nextNotBeforeMillis = nextMatch?.let { computeNotBefore(it, context) },
                         matchId = null,
                         startedAtMillis = null,
+                        queueEntries = queueEntries,
+                        activeEntryIndex = activeEntryIndex,
                     )
                 } else {
                     CourtCard(
@@ -1434,6 +1472,8 @@ class AppRepository @Inject constructor(
                         nextNotBeforeMillis = nextMatch?.let { computeNotBefore(it, context) },
                         matchId = currentMatch.id,
                         startedAtMillis = currentMatch.startedAt,
+                        queueEntries = queueEntries,
+                        activeEntryIndex = activeEntryIndex,
                     )
                 }
             }
@@ -1884,7 +1924,35 @@ class AppRepository @Inject constructor(
 
     override suspend fun autoStartMatchFromWarmup(matchId: Long): StartMatchResult {
         val match = matchDao.getById(matchId) ?: return StartMatchResult.MatchNotFound
-        val initialServerPlayerId = match.initialServerPlayerId ?: return StartMatchResult.InvalidInitialServer
+        val initialServerPlayerId = match.initialServerPlayerId ?: run {
+            val fallbackServer = database.withTransaction {
+                val freshMatch = matchDao.getById(matchId) ?: return@withTransaction null
+                if (freshMatch.status != MatchStatus.SCHEDULED) return@withTransaction null
+                val allMatches = matchDao.getAll()
+                val allSlots = slotDao.getAll()
+                val players = playerDao.getAll()
+                val teamPlayers = teamPlayerDao.getAll()
+                val tournament = tournamentDao.getFirst()
+                val context = BuildContext(
+                    matches = allMatches,
+                    slotsByMatch = allSlots.groupBy { it.matchId },
+                    playersById = players.associateBy { it.id },
+                    teamPlayersByTeam = teamPlayers.groupBy { it.teamId }.mapValues { entry ->
+                        entry.value.sortedBy { it.playerOrder }.mapNotNull { ref -> players.firstOrNull { it.id == ref.playerId } }
+                    },
+                    defaultRestMinutes = tournament?.defaultRestMinutes ?: DEFAULT_REST_MINUTES,
+                )
+                val left = sideForMatch(matchId, SlotPosition.LEFT, context)
+                val right = sideForMatch(matchId, SlotPosition.RIGHT, context)
+                val candidate = left?.players?.firstOrNull()?.playerId
+                    ?: right?.players?.firstOrNull()?.playerId
+                if (candidate != null) {
+                    matchDao.update(freshMatch.copy(initialServerPlayerId = candidate))
+                }
+                candidate
+            }
+            fallbackServer ?: return StartMatchResult.InvalidInitialServer
+        }
         return startMatch(
             matchId = matchId,
             initialServerPlayerId = initialServerPlayerId,
