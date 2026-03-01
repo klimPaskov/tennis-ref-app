@@ -25,6 +25,9 @@ interface EventLogDao {
     @Query("SELECT * FROM event_logs WHERE matchId = :matchId AND eventType = :eventType ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestByMatchAndType(matchId: Long, eventType: EventType): EventLogEntity?
 
+    @Query("UPDATE event_logs SET timestamp = :timestamp, message = :message WHERE id = :eventId")
+    suspend fun updateEvent(eventId: Long, timestamp: Long, message: String?): Int
+
     @Query("DELETE FROM event_logs WHERE id = :eventId")
-    suspend fun deleteById(eventId: Long)
+    suspend fun deleteById(eventId: Long): Int
 }

@@ -24,6 +24,11 @@ enum class MatchResultType {
     DEFAULT,
 }
 
+enum class ScheduledMatchTiming {
+    FOLLOWED_BY,
+    NOT_BEFORE,
+}
+
 data class ApplyViolationResult(
     val guidance: ViolationGuidance,
     val summary: String,
@@ -71,4 +76,11 @@ interface MatchRepository {
     suspend fun moveMatchToCourt(matchId: Long, courtId: Long?): Boolean
     suspend fun autoStartMatchFromWarmup(matchId: Long): StartMatchResult
     suspend fun getRestPrompt(matchId: Long): RestPrompt?
+    suspend fun updateScheduledMatch(
+        matchId: Long,
+        leftPlayerId: Long,
+        rightPlayerId: Long,
+        timing: ScheduledMatchTiming,
+        notBeforeLabel: String?,
+    ): Boolean
 }

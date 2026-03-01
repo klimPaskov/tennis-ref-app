@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
@@ -90,11 +93,13 @@ import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.model.PlayerRef
+import com.klim.tennisrefapp.domain.model.PlayerSummary
 import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
+import com.klim.tennisrefapp.domain.repository.ScheduledMatchTiming
 import com.klim.tennisrefapp.ui.theme.TennisRefTheme
 import kotlin.math.max
 import kotlin.math.abs
@@ -232,6 +237,7 @@ fun CourtDetailRoute(
         onOpenDependencyCourt = viewModel::onOpenDependencyCourt,
         onApplyViolation = viewModel::onApplyViolation,
         onSubmitFinalScore = viewModel::onSubmitFinalScore,
+        onUpdateScheduledMatch = viewModel::onUpdateScheduledMatch,
         onSaveLiveScoreSnapshot = viewModel::onSaveLiveScoreSnapshot,
         onLogScoreArgument = viewModel::onLogScoreArgument,
         onDismissRestPrompt = viewModel::onDismissRestPrompt,
@@ -254,6 +260,7 @@ private fun CourtDetailScreen(
     onOpenDependencyCourt: (Long?) -> Unit,
     onApplyViolation: (Long, ViolationCategory, String) -> Unit,
     onSubmitFinalScore: (MatchWinnerSide, String) -> Unit,
+    onUpdateScheduledMatch: (Long, Long, ScheduledMatchTiming, String?) -> Unit,
     onSaveLiveScoreSnapshot: (String) -> Unit,
     onLogScoreArgument: (String) -> Unit,
     onDismissRestPrompt: () -> Unit,
@@ -267,6 +274,7 @@ private fun CourtDetailScreen(
     var showArgumentDialog by remember { mutableStateOf(false) }
     var showMedicalTimeoutDialog by remember { mutableStateOf(false) }
     var showLiveScoreDialog by remember { mutableStateOf(false) }
+    var showEditMatchDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -278,6 +286,16 @@ private fun CourtDetailScreen(
                             imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                             contentDescription = "Back",
                         )
+                    }
+                },
+                actions = {
+                    if (detail?.status == CourtStatus.SCHEDULED && detail.matchId != null) {
+                        IconButton(onClick = { showEditMatchDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = "Edit match",
+                            )
+                        }
                     }
                 },
             )
@@ -413,6 +431,18 @@ private fun CourtDetailScreen(
             onSave = { score ->
                 onSaveLiveScoreSnapshot(score)
                 showLiveScoreDialog = false
+            },
+        )
+    }
+
+    if (showEditMatchDialog && detail != null && detail.status == CourtStatus.SCHEDULED) {
+        EditScheduledMatchDialog(
+            detail = detail,
+            availablePlayers = uiState.availablePlayers,
+            onDismiss = { showEditMatchDialog = false },
+            onSave = { leftPlayerId, rightPlayerId, timing, notBeforeLabel ->
+                onUpdateScheduledMatch(leftPlayerId, rightPlayerId, timing, notBeforeLabel)
+                showEditMatchDialog = false
             },
         )
     }
@@ -851,6 +881,144 @@ private fun LiveScoreSnapshotDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+private enum class PlayerSelectTarget {
+    LEFT,
+    RIGHT,
+}
+
+@Composable
+private fun EditScheduledMatchDialog(
+    detail: CourtDetail,
+    availablePlayers: List<PlayerSummary>,
+    onDismiss: () -> Unit,
+    onSave: (Long, Long, ScheduledMatchTiming, String?) -> Unit,
+) {
+    val initialLeftId = detail.leftSide?.players?.firstOrNull()?.playerId
+    val initialRightId = detail.rightSide?.players?.firstOrNull()?.playerId
+    val initialTiming = if (detail.scheduleLabel?.contains("Followed By", ignoreCase = true) == true) {
+        ScheduledMatchTiming.FOLLOWED_BY
+    } else {
+        ScheduledMatchTiming.NOT_BEFORE
+    }
+    val extractedTime = Regex("(\\d{1,2}:\\d{2})")
+        .find(detail.scheduleLabel.orEmpty())
+        ?.groupValues
+        ?.getOrNull(1)
+        ?: detail.computedNotBeforeMillis?.let(::formatTime).orEmpty()
+
+    var selectedLeftPlayerId by remember(detail.matchId) { mutableStateOf(initialLeftId) }
+    var selectedRightPlayerId by remember(detail.matchId) { mutableStateOf(initialRightId) }
+    var timing by remember(detail.matchId) { mutableStateOf(initialTiming) }
+    var notBeforeLabel by remember(detail.matchId) { mutableStateOf(extractedTime) }
+    var pickingTarget by remember { mutableStateOf<PlayerSelectTarget?>(null) }
+
+    val playersById = remember(availablePlayers) { availablePlayers.associateBy { it.id } }
+    val leftPlayer = selectedLeftPlayerId?.let(playersById::get)
+    val rightPlayer = selectedRightPlayerId?.let(playersById::get)
+    val timeValid = timing == ScheduledMatchTiming.FOLLOWED_BY || isValidTimeLabel(notBeforeLabel)
+    val canSave = leftPlayer != null && rightPlayer != null && leftPlayer.id != rightPlayer.id && timeValid
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Scheduled Match") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Players", style = MaterialTheme.typography.titleSmall)
+                OutlinedButton(
+                    onClick = { pickingTarget = PlayerSelectTarget.LEFT },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(leftPlayer?.let(::displayPlayerSummaryLabel) ?: "Choose left player")
+                }
+                OutlinedButton(
+                    onClick = { pickingTarget = PlayerSelectTarget.RIGHT },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(rightPlayer?.let(::displayPlayerSummaryLabel) ?: "Choose right player")
+                }
+
+                Text("Schedule", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = timing == ScheduledMatchTiming.FOLLOWED_BY,
+                        onClick = { timing = ScheduledMatchTiming.FOLLOWED_BY },
+                        label = { Text("Followed By") },
+                    )
+                    FilterChip(
+                        selected = timing == ScheduledMatchTiming.NOT_BEFORE,
+                        onClick = { timing = ScheduledMatchTiming.NOT_BEFORE },
+                        label = { Text("Not Before") },
+                    )
+                }
+                if (timing == ScheduledMatchTiming.NOT_BEFORE) {
+                    TextField(
+                        value = notBeforeLabel,
+                        onValueChange = { notBeforeLabel = it.filter { char -> char.isDigit() || char == ':' } },
+                        label = { Text("Time (HH:mm)") },
+                        singleLine = true,
+                        isError = !timeValid,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val left = leftPlayer ?: return@Button
+                    val right = rightPlayer ?: return@Button
+                    val timeValue = if (timing == ScheduledMatchTiming.NOT_BEFORE) {
+                        normalizeTimeLabel(notBeforeLabel)
+                    } else {
+                        null
+                    }
+                    onSave(left.id, right.id, timing, timeValue)
+                },
+                enabled = canSave,
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+
+    val picking = pickingTarget
+    if (picking != null) {
+        AlertDialog(
+            onDismissRequest = { pickingTarget = null },
+            title = { Text("Select Player") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(availablePlayers, key = { it.id }) { player ->
+                        OutlinedButton(
+                            onClick = {
+                                when (picking) {
+                                    PlayerSelectTarget.LEFT -> selectedLeftPlayerId = player.id
+                                    PlayerSelectTarget.RIGHT -> selectedRightPlayerId = player.id
+                                }
+                                pickingTarget = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(displayPlayerSummaryLabel(player))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pickingTarget = null }) {
+                    Text("Close")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -2058,9 +2226,31 @@ private fun displayPlayerLabel(player: PlayerRef): String {
     return displayPlayerNameWithFlag(player.name, player.countryCode)
 }
 
+private fun displayPlayerSummaryLabel(player: PlayerSummary): String {
+    return displayPlayerNameWithFlag(player.displayName, player.countryCode)
+}
+
 private fun displayPlayerNameWithFlag(name: String, countryCode: String?): String {
     val flag = countryCodeToFlagEmoji(countryCode)
     return if (flag != null) "$flag $name" else name
+}
+
+private fun isValidTimeLabel(value: String): Boolean {
+    val normalized = normalizeTimeLabel(value) ?: return false
+    val parts = normalized.split(":")
+    if (parts.size != 2) return false
+    val hour = parts[0].toIntOrNull() ?: return false
+    val minute = parts[1].toIntOrNull() ?: return false
+    return hour in 0..23 && minute in 0..59
+}
+
+private fun normalizeTimeLabel(value: String): String? {
+    val parts = value.trim().split(":")
+    if (parts.size != 2) return null
+    val hour = parts[0].toIntOrNull() ?: return null
+    val minute = parts[1].toIntOrNull() ?: return null
+    if (hour !in 0..23 || minute !in 0..59) return null
+    return "%02d:%02d".format(hour, minute)
 }
 
 private fun splitNameIntoTwoLines(name: String): Pair<String, String?> {
@@ -2179,6 +2369,7 @@ private fun CourtDetailScheduledPreview() {
             onOpenDependencyCourt = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onUpdateScheduledMatch = { _, _, _, _ -> },
             onSaveLiveScoreSnapshot = {},
             onLogScoreArgument = {},
             onDismissRestPrompt = {},
@@ -2235,6 +2426,7 @@ private fun CourtDetailCompletedPreview() {
             onOpenDependencyCourt = {},
             onApplyViolation = { _, _, _ -> },
             onSubmitFinalScore = { _, _ -> },
+            onUpdateScheduledMatch = { _, _, _, _ -> },
             onSaveLiveScoreSnapshot = {},
             onLogScoreArgument = {},
             onDismissRestPrompt = {},

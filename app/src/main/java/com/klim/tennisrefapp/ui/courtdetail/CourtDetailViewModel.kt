@@ -12,6 +12,7 @@ import com.klim.tennisrefapp.domain.model.CourtDetail
 import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
+import com.klim.tennisrefapp.domain.model.PlayerSummary
 import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
@@ -23,6 +24,7 @@ import com.klim.tennisrefapp.domain.repository.MatchRepository
 import com.klim.tennisrefapp.domain.repository.MatchResultType
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
+import com.klim.tennisrefapp.domain.repository.ScheduledMatchTiming
 import com.klim.tennisrefapp.domain.repository.StartMatchResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -42,6 +44,7 @@ import kotlinx.coroutines.launch
 
 data class CourtDetailUiState(
     val detail: CourtDetail? = null,
+    val availablePlayers: List<PlayerSummary> = emptyList(),
     val selectedServerPlayerId: Long? = null,
     val feedbackMessage: UiFeedback? = null,
     val timerState: CourtTimerState? = null,
@@ -95,6 +98,7 @@ class CourtDetailViewModel @Inject constructor(
         timerManager.observeTimer(detail.courtId)
     }
     private val settingsFlow = appSettingsStore.settings
+    private val playersFlow = playerRepository.observePlayers()
 
     val uiState: StateFlow<CourtDetailUiState> = combine(
         detailFlow,
@@ -104,6 +108,7 @@ class CourtDetailViewModel @Inject constructor(
         timerFlow,
         eventsFlow,
         settingsFlow,
+        playersFlow,
     ) { values ->
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
@@ -113,6 +118,8 @@ class CourtDetailViewModel @Inject constructor(
         @Suppress("UNCHECKED_CAST")
         val events = values[5] as List<MatchEvent>
         val settings = values[6] as AppSettings
+        @Suppress("UNCHECKED_CAST")
+        val players = values[7] as List<PlayerSummary>
         val allowedServerIds = buildList {
             addAll(detail?.leftSide?.players?.map { it.playerId }.orEmpty())
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
@@ -125,6 +132,7 @@ class CourtDetailViewModel @Inject constructor(
         }
         CourtDetailUiState(
             detail = detail,
+            availablePlayers = players.sortedBy { it.displayName.lowercase() },
             selectedServerPlayerId = currentSelection,
             feedbackMessage = feedback,
             restPrompt = prompt,
@@ -360,6 +368,35 @@ class CourtDetailViewModel @Inject constructor(
                 EndMatchResult.MatchNotFound -> UiFeedback("Match not found")
                 EndMatchResult.InvalidMatchState -> UiFeedback("Match must be in progress")
                 EndMatchResult.MissingResolvedParticipants -> UiFeedback("Unable to determine winner teams")
+            }
+        }
+    }
+
+    fun onUpdateScheduledMatch(
+        leftPlayerId: Long,
+        rightPlayerId: Long,
+        timing: ScheduledMatchTiming,
+        notBeforeLabel: String?,
+    ) {
+        val detail = uiState.value.detail ?: return
+        val matchId = detail.matchId ?: return
+        if (detail.status != CourtStatus.SCHEDULED) {
+            feedbackMessage.value = UiFeedback("Only scheduled matches can be edited.")
+            return
+        }
+        viewModelScope.launch {
+            val updated = matchRepository.updateScheduledMatch(
+                matchId = matchId,
+                leftPlayerId = leftPlayerId,
+                rightPlayerId = rightPlayerId,
+                timing = timing,
+                notBeforeLabel = notBeforeLabel,
+            )
+            if (updated) {
+                selectedServerPlayerId.value = null
+                feedbackMessage.value = UiFeedback("Scheduled match updated.")
+            } else {
+                feedbackMessage.value = UiFeedback("Could not update scheduled match.")
             }
         }
     }

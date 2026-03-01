@@ -31,6 +31,9 @@ data class CourtCard(
     val currentMatchLabel: String,
     val scheduleLabel: String?,
     val computedNotBeforeMillis: Long?,
+    val nextMatchLabel: String?,
+    val nextScheduleLabel: String?,
+    val nextNotBeforeMillis: Long?,
     val matchId: Long?,
     val startedAtMillis: Long?,
 )

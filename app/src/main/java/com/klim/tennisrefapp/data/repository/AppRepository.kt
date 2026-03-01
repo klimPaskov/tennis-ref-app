@@ -58,6 +58,7 @@ import com.klim.tennisrefapp.domain.repository.EventLogRepository
 import com.klim.tennisrefapp.domain.repository.HistoryRepository
 import com.klim.tennisrefapp.domain.repository.MatchResultType
 import com.klim.tennisrefapp.domain.repository.MatchRepository
+import com.klim.tennisrefapp.domain.repository.ScheduledMatchTiming
 import com.klim.tennisrefapp.domain.repository.MatchWinnerSide
 import com.klim.tennisrefapp.domain.repository.PlayerInsightsRepository
 import com.klim.tennisrefapp.domain.repository.PlayerRepository
@@ -1329,6 +1330,7 @@ class AppRepository @Inject constructor(
             )
             courts.map { court ->
                 val currentMatch = pickCurrentMatch(court.id, matches)
+                val nextMatch = pickNextScheduledMatch(court.id, matches, currentMatch?.id)
                 if (currentMatch == null) {
                     CourtCard(
                         courtId = court.id,
@@ -1337,6 +1339,9 @@ class AppRepository @Inject constructor(
                         currentMatchLabel = "No match",
                         scheduleLabel = null,
                         computedNotBeforeMillis = null,
+                        nextMatchLabel = nextMatch?.let { formatMatchLabel(it, context) },
+                        nextScheduleLabel = nextMatch?.let { extractScheduleLabel(it.roundName) },
+                        nextNotBeforeMillis = nextMatch?.let { computeNotBefore(it, context) },
                         matchId = null,
                         startedAtMillis = null,
                     )
@@ -1348,6 +1353,9 @@ class AppRepository @Inject constructor(
                         currentMatchLabel = formatMatchLabel(currentMatch, context),
                         scheduleLabel = extractScheduleLabel(currentMatch.roundName),
                         computedNotBeforeMillis = computeNotBefore(currentMatch, context),
+                        nextMatchLabel = nextMatch?.let { formatMatchLabel(it, context) },
+                        nextScheduleLabel = nextMatch?.let { extractScheduleLabel(it.roundName) },
+                        nextNotBeforeMillis = nextMatch?.let { computeNotBefore(it, context) },
                         matchId = currentMatch.id,
                         startedAtMillis = currentMatch.startedAt,
                     )
@@ -1649,8 +1657,7 @@ class AppRepository @Inject constructor(
 
     override suspend fun undoLastViolation(matchId: Long): Boolean {
         val latest = eventLogDao.getLatestByMatchAndType(matchId, EventType.VIOLATION) ?: return false
-        eventLogDao.deleteById(latest.id)
-        return true
+        return eventLogDao.deleteById(latest.id) > 0
     }
 
     override suspend fun clearCourt(courtId: Long) {
@@ -1716,6 +1723,86 @@ class AppRepository @Inject constructor(
             true
         }.also {
             if (it) recomputeNotBeforeAndSchedule()
+        }
+    }
+
+    override suspend fun updateScheduledMatch(
+        matchId: Long,
+        leftPlayerId: Long,
+        rightPlayerId: Long,
+        timing: ScheduledMatchTiming,
+        notBeforeLabel: String?,
+    ): Boolean {
+        if (leftPlayerId == rightPlayerId) return false
+        return database.withTransaction {
+            val match = matchDao.getById(matchId) ?: return@withTransaction false
+            if (match.status != MatchStatus.SCHEDULED) return@withTransaction false
+
+            val teamRefs = teamPlayerDao.getAll().groupBy { ref -> ref.teamId }
+            fun resolveTeamIdForPlayer(playerId: Long): Long? {
+                return teamRefs
+                    .entries
+                    .firstOrNull { entry ->
+                        entry.value.size == 1 && entry.value.firstOrNull()?.playerId == playerId
+                    }
+                    ?.key
+                    ?: teamRefs.entries.firstOrNull { entry ->
+                        entry.value.any { ref -> ref.playerId == playerId }
+                    }?.key
+            }
+
+            val leftTeamId = resolveTeamIdForPlayer(leftPlayerId) ?: return@withTransaction false
+            val rightTeamId = resolveTeamIdForPlayer(rightPlayerId) ?: return@withTransaction false
+            if (leftTeamId == rightTeamId) return@withTransaction false
+
+            val slots = slotDao.getByMatchId(matchId)
+            val leftSlot = slots.firstOrNull { it.position == SlotPosition.LEFT } ?: return@withTransaction false
+            val rightSlot = slots.firstOrNull { it.position == SlotPosition.RIGHT } ?: return@withTransaction false
+
+            slotDao.update(
+                leftSlot.copy(
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = leftTeamId,
+                    winnerOfMatchId = null,
+                ),
+            )
+            slotDao.update(
+                rightSlot.copy(
+                    slotType = SlotType.DIRECT_TEAM,
+                    directTeamId = rightTeamId,
+                    winnerOfMatchId = null,
+                ),
+            )
+
+            val manualNotBefore = if (timing == ScheduledMatchTiming.NOT_BEFORE) {
+                notBeforeLabel?.let(::toTodayMillis)
+            } else {
+                null
+            }
+            val newRoundName = buildRoundNameForManualEdit(
+                existingRoundName = match.roundName,
+                timing = timing,
+                manualNotBeforeMillis = manualNotBefore,
+            )
+
+            matchDao.update(
+                match.copy(
+                    roundName = newRoundName,
+                    manualNotBefore = manualNotBefore,
+                    computedNotBefore = null,
+                    startedAt = null,
+                    endedAt = null,
+                    winnerTeamId = null,
+                    initialLeftTeamId = null,
+                    initialRightTeamId = null,
+                    initialServerPlayerId = null,
+                    resultType = null,
+                    scoreText = null,
+                ),
+            )
+            true
+        }.also { updated ->
+            if (updated) recomputeNotBeforeAndSchedule()
         }
     }
 
@@ -1828,6 +1915,22 @@ class AppRepository @Inject constructor(
         )
     }
 
+    override suspend fun updateEvent(
+        eventId: Long,
+        timestamp: Long,
+        message: String?,
+    ): Boolean {
+        return eventLogDao.updateEvent(
+            eventId = eventId,
+            timestamp = timestamp,
+            message = message,
+        ) > 0
+    }
+
+    override suspend fun deleteEvent(eventId: Long): Boolean {
+        return eventLogDao.deleteById(eventId) > 0
+    }
+
     override fun observeEventsForMatch(matchId: Long): Flow<List<MatchEvent>> {
         return eventLogDao.observeByMatchId(matchId).mapList { event ->
             MatchEvent(
@@ -1926,6 +2029,27 @@ class AppRepository @Inject constructor(
         }
     }
 
+    private fun buildRoundNameForManualEdit(
+        existingRoundName: String?,
+        timing: ScheduledMatchTiming,
+        manualNotBeforeMillis: Long?,
+    ): String {
+        val orderPrefix = Regex("^\\s*(\\d+)\\b")
+            .find(existingRoundName.orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+        val eventCode = extractEventCodeFromRoundName(existingRoundName)
+        val scheduleBody = when (timing) {
+            ScheduledMatchTiming.FOLLOWED_BY -> "Followed By"
+            ScheduledMatchTiming.NOT_BEFORE -> {
+                val value = manualNotBeforeMillis?.let(::formatTime)
+                if (value != null) "Not Before $value" else "Not Before"
+            }
+        }
+        val base = if (orderPrefix != null) "$orderPrefix. $scheduleBody" else scheduleBody
+        return if (eventCode != null) "$base $eventCode" else base
+    }
+
     private fun sideForMatch(
         matchId: Long,
         position: SlotPosition,
@@ -2021,6 +2145,22 @@ class AppRepository @Inject constructor(
             .firstOrNull { it.status == MatchStatus.IN_PROGRESS }
             ?: matchesForCourt.firstOrNull { it.status == MatchStatus.SCHEDULED }
             ?: matchesForCourt.firstOrNull { it.status == MatchStatus.COMPLETED }
+    }
+
+    private fun pickNextScheduledMatch(
+        courtId: Long,
+        matches: List<MatchEntity>,
+        currentMatchId: Long?,
+    ): MatchEntity? {
+        return matches
+            .asSequence()
+            .filter { match ->
+                match.courtId == courtId &&
+                    match.status == MatchStatus.SCHEDULED &&
+                    (currentMatchId == null || match.id != currentMatchId)
+            }
+            .sortedBy { it.id }
+            .firstOrNull()
     }
 
     private fun MatchStatus.toCourtStatus(): CourtStatus {
@@ -3866,6 +4006,13 @@ class AppRepository @Inject constructor(
         now.set(java.util.Calendar.SECOND, 0)
         now.set(java.util.Calendar.MILLISECOND, 0)
         return now.timeInMillis
+    }
+
+    private fun formatTime(timestamp: Long): String {
+        val calendar = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(java.util.Calendar.MINUTE)
+        return "%02d:%02d".format(hour, minute)
     }
 
     private fun isVsToken(line: String): Boolean {

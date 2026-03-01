@@ -15,4 +15,12 @@ interface EventLogRepository {
     )
 
     fun observeEventsForMatch(matchId: Long): Flow<List<MatchEvent>>
+
+    suspend fun updateEvent(
+        eventId: Long,
+        timestamp: Long,
+        message: String?,
+    ): Boolean
+
+    suspend fun deleteEvent(eventId: Long): Boolean
 }
