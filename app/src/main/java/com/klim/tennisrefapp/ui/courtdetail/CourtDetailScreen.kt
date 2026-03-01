@@ -61,7 +61,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -94,7 +93,6 @@ import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.model.PlayerRef
 import com.klim.tennisrefapp.domain.model.PlayerSummary
-import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
@@ -240,8 +238,6 @@ fun CourtDetailRoute(
         onUpdateScheduledMatch = viewModel::onUpdateScheduledMatch,
         onSaveLiveScoreSnapshot = viewModel::onSaveLiveScoreSnapshot,
         onLogScoreArgument = viewModel::onLogScoreArgument,
-        onDismissRestPrompt = viewModel::onDismissRestPrompt,
-        onApplyRestChoices = viewModel::onApplyRestChoices,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -263,8 +259,6 @@ private fun CourtDetailScreen(
     onUpdateScheduledMatch: (Long, Long, ScheduledMatchTiming, String?) -> Unit,
     onSaveLiveScoreSnapshot: (String) -> Unit,
     onLogScoreArgument: (String) -> Unit,
-    onDismissRestPrompt: () -> Unit,
-    onApplyRestChoices: (Map<Long, Int>) -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
@@ -447,14 +441,6 @@ private fun CourtDetailScreen(
         )
     }
 
-    val restPrompt = uiState.restPrompt
-    if (restPrompt != null) {
-        RestPromptDialog(
-            prompt = restPrompt,
-            onDismiss = onDismissRestPrompt,
-            onConfirm = onApplyRestChoices,
-        )
-    }
 }
 
 @Composable
@@ -1790,92 +1776,6 @@ private fun ScoreSetRow(
 }
 
 @Composable
-private fun RestPromptDialog(
-    prompt: RestPrompt,
-    onDismiss: () -> Unit,
-    onConfirm: (Map<Long, Int>) -> Unit,
-) {
-    val restByPlayer = remember(prompt) {
-        mutableStateMapOf<Long, String>().apply {
-            prompt.players.forEach { player ->
-                put(player.playerId, player.suggestedRestMinutes.toString())
-            }
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Rest Request") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    "Match lasted ${prompt.matchDurationMinutes} minutes. Set rest for players with upcoming matches.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                prompt.players.forEach { player ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = displayPlayerNameWithFlag(player.playerName, player.countryCode),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = "${player.upcomingCourtName ?: "Unassigned"} · ${player.upcomingMatchLabel}",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text("Rest (min)", style = MaterialTheme.typography.bodySmall)
-                                TextField(
-                                    value = restByPlayer[player.playerId].orEmpty(),
-                                    onValueChange = { value ->
-                                        restByPlayer[player.playerId] = value.filter { it.isDigit() }.take(3)
-                                    },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val values = prompt.players.associate { player ->
-                        val minutes = restByPlayer[player.playerId]
-                            ?.toIntOrNull()
-                            ?.coerceIn(0, 180)
-                            ?: player.suggestedRestMinutes
-                        player.playerId to minutes
-                    }
-                    onConfirm(values)
-                },
-            ) {
-                Text("Apply")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Later") }
-        },
-    )
-}
-
-@Composable
 private fun AutoSizingNameLine(
     text: String,
     isEmphasized: Boolean,
@@ -2428,8 +2328,6 @@ private fun CourtDetailScheduledPreview() {
             onUpdateScheduledMatch = { _, _, _, _ -> },
             onSaveLiveScoreSnapshot = {},
             onLogScoreArgument = {},
-            onDismissRestPrompt = {},
-            onApplyRestChoices = {},
             snackbarHostState = SnackbarHostState(),
         )
     }
@@ -2485,8 +2383,6 @@ private fun CourtDetailCompletedPreview() {
             onUpdateScheduledMatch = { _, _, _, _ -> },
             onSaveLiveScoreSnapshot = {},
             onLogScoreArgument = {},
-            onDismissRestPrompt = {},
-            onApplyRestChoices = {},
             snackbarHostState = SnackbarHostState(),
         )
     }

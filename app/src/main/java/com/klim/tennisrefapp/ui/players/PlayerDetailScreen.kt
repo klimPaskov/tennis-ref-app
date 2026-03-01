@@ -22,22 +22,16 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.foundation.text.KeyboardOptions
 import com.klim.tennisrefapp.common.CountryFlags
 
 @Composable
@@ -57,7 +51,6 @@ fun PlayerDetailRoute(
     PlayerDetailScreen(
         uiState = uiState,
         onBack = onBack,
-        onUpdateRestMinutes = viewModel::onUpdateRestMinutes,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -67,13 +60,9 @@ fun PlayerDetailRoute(
 private fun PlayerDetailScreen(
     uiState: PlayerDetailUiState,
     onBack: () -> Unit,
-    onUpdateRestMinutes: (Int) -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     val detail = uiState.detail
-    var restInput by remember(detail?.playerId, detail?.currentRestMinutes) {
-        mutableStateOf(detail?.currentRestMinutes?.toString().orEmpty())
-    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -116,33 +105,6 @@ private fun PlayerDetailScreen(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
-            }
-            item {
-                if (detail.canRequestRest) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("Rest Minutes", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text("Current: ${detail.currentRestMinutes} min", style = MaterialTheme.typography.bodySmall)
-                            TextField(
-                                value = restInput,
-                                onValueChange = { value -> restInput = value.filter { it.isDigit() }.take(3) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            )
-                            TextButton(
-                                onClick = {
-                                    val minutes = restInput.toIntOrNull() ?: detail.currentRestMinutes
-                                    onUpdateRestMinutes(minutes)
-                                },
-                            ) {
-                                Text("Save Rest")
-                            }
-                        }
-                    }
-                }
             }
             item {
                 Text("Next Match", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

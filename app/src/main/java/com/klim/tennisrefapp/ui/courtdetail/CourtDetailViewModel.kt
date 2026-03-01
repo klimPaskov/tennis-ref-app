@@ -13,7 +13,6 @@ import com.klim.tennisrefapp.domain.model.CourtStatus
 import com.klim.tennisrefapp.domain.model.MatchEvent
 import com.klim.tennisrefapp.domain.model.MatchEventKind
 import com.klim.tennisrefapp.domain.model.PlayerSummary
-import com.klim.tennisrefapp.domain.model.RestPrompt
 import com.klim.tennisrefapp.domain.model.SideParticipant
 import com.klim.tennisrefapp.domain.model.ViolationCategory
 import com.klim.tennisrefapp.domain.model.ViolationCounts
@@ -50,7 +49,6 @@ data class CourtDetailUiState(
     val timerState: CourtTimerState? = null,
     val matchEvents: List<MatchEvent> = emptyList(),
     val violationCountsByPlayer: Map<Long, ViolationCounts> = emptyMap(),
-    val restPrompt: RestPrompt? = null,
     val timerDurationsByType: Map<CourtTimerType, Long> = emptyMap(),
 )
 
@@ -79,7 +77,6 @@ class CourtDetailViewModel @Inject constructor(
     private val courtId: Long = checkNotNull(savedStateHandle.get<Long>("courtId"))
     private val selectedServerPlayerId = MutableStateFlow<Long?>(null)
     private val feedbackMessage = MutableStateFlow<UiFeedback?>(null)
-    private val restPrompt = MutableStateFlow<RestPrompt?>(null)
     private val _navigationEvents = MutableSharedFlow<CourtDetailNavigationEvent>(extraBufferCapacity = 1)
     val navigationEvents: SharedFlow<CourtDetailNavigationEvent> = _navigationEvents.asSharedFlow()
     private var warmupCompletedForMatchId: Long? = null
@@ -104,7 +101,6 @@ class CourtDetailViewModel @Inject constructor(
         detailFlow,
         selectedServerPlayerId,
         feedbackMessage,
-        restPrompt,
         timerFlow,
         eventsFlow,
         settingsFlow,
@@ -113,13 +109,12 @@ class CourtDetailViewModel @Inject constructor(
         val detail = values[0] as CourtDetail?
         val selectedServer = values[1] as Long?
         val feedback = values[2] as UiFeedback?
-        val prompt = values[3] as RestPrompt?
-        val timer = values[4] as CourtTimerState?
+        val timer = values[3] as CourtTimerState?
         @Suppress("UNCHECKED_CAST")
-        val events = values[5] as List<MatchEvent>
-        val settings = values[6] as AppSettings
+        val events = values[4] as List<MatchEvent>
+        val settings = values[5] as AppSettings
         @Suppress("UNCHECKED_CAST")
-        val players = values[7] as List<PlayerSummary>
+        val players = values[6] as List<PlayerSummary>
         val allowedServerIds = buildList {
             addAll(detail?.leftSide?.players?.map { it.playerId }.orEmpty())
             addAll(detail?.rightSide?.players?.map { it.playerId }.orEmpty())
@@ -135,7 +130,6 @@ class CourtDetailViewModel @Inject constructor(
             availablePlayers = players.sortedBy { it.displayName.lowercase() },
             selectedServerPlayerId = currentSelection,
             feedbackMessage = feedback,
-            restPrompt = prompt,
             timerState = timer,
             matchEvents = events,
             violationCountsByPlayer = countViolations(events),
@@ -185,7 +179,6 @@ class CourtDetailViewModel @Inject constructor(
             warmupStartedForMatchId = null
             selectedServerPlayerId.value = null
             feedbackMessage.value = null
-            restPrompt.value = null
         }
     }
 
@@ -356,14 +349,8 @@ class CourtDetailViewModel @Inject constructor(
                     warmupCompletedForMatchId = null
                     warmupStartedForMatchId = null
                     timerManager.stop(courtId)
-                    val prompt = matchRepository.getRestPrompt(matchId)
-                    restPrompt.value = prompt
                     _navigationEvents.tryEmit(CourtDetailNavigationEvent.BackToCourts)
-                    if (prompt == null) {
-                        UiFeedback("Final score submitted")
-                    } else {
-                        UiFeedback("Final score submitted. Set player rest preferences.")
-                    }
+                    UiFeedback("Final score submitted")
                 }
                 EndMatchResult.MatchNotFound -> UiFeedback("Match not found")
                 EndMatchResult.InvalidMatchState -> UiFeedback("Match must be in progress")
@@ -398,29 +385,6 @@ class CourtDetailViewModel @Inject constructor(
             } else {
                 feedbackMessage.value = UiFeedback("Could not update scheduled match.")
             }
-        }
-    }
-
-    fun onDismissRestPrompt() {
-        restPrompt.value = null
-    }
-
-    fun onApplyRestChoices(choices: Map<Long, Int>) {
-        if (choices.isEmpty()) {
-            restPrompt.value = null
-            return
-        }
-        viewModelScope.launch {
-            var updated = 0
-            choices.forEach { (playerId, minutes) ->
-                if (playerRepository.updateRestMinutes(playerId, minutes)) {
-                    updated += 1
-                }
-            }
-            restPrompt.value = null
-            feedbackMessage.value = UiFeedback(
-                if (updated > 0) "Rest preferences updated." else "No rest preferences were updated.",
-            )
         }
     }
 
