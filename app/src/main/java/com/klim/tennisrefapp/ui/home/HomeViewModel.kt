@@ -16,16 +16,16 @@ import kotlinx.coroutines.launch
 data class HomeUiState(
     val isReloading: Boolean = false,
     val isSavingPreset: Boolean = false,
+    val isDeletingPreset: Boolean = false,
     val message: String? = null,
     val hasDraws: Boolean = false,
-    val preloadedOptions: List<PreloadedOrderOption> = listOf(
-        PreloadedOrderOption(id = "example", label = "Example"),
-    ),
+    val preloadedOptions: List<PreloadedOrderOption> = emptyList(),
 )
 
 data class PreloadedOrderOption(
     val id: String,
     val label: String,
+    val isDeletable: Boolean,
 )
 
 @HiltViewModel
@@ -105,6 +105,22 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun onDeletePreloadedOrderOfPlay(preloadId: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isDeletingPreset = true, message = null)
+            val deleted = tournamentRepository.deletePreloadedOrderOfPlay(preloadId)
+            loadPreloadedOptions()
+            _uiState.value = _uiState.value.copy(
+                isDeletingPreset = false,
+                message = if (deleted) {
+                    "Preset removed."
+                } else {
+                    "Could not remove preset."
+                },
+            )
+        }
+    }
+
     fun onSaveCurrentAsPreset(rawName: String) {
         val name = rawName.trim()
         if (name.isBlank()) {
@@ -137,6 +153,7 @@ class HomeViewModel @Inject constructor(
                     PreloadedOrderOption(
                         id = option.id,
                         label = option.label,
+                        isDeletable = option.isDeletable,
                     )
                 }
             _uiState.value = _uiState.value.copy(preloadedOptions = options)

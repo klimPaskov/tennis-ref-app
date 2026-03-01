@@ -5,15 +5,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -22,6 +26,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,6 +81,7 @@ fun HomeRoute(
         },
         onReloadCurrent = viewModel::onReloadCurrentOrderOfPlay,
         onLoadPreloaded = viewModel::onLoadPreloadedOrderOfPlay,
+        onDeletePreloaded = viewModel::onDeletePreloadedOrderOfPlay,
         onSaveCurrentAsPreset = viewModel::onSaveCurrentAsPreset,
         onPlayers = onPlayers,
         onHistory = onHistory,
@@ -92,6 +99,7 @@ private fun HomeScreen(
     onNewOrderOfPlay: () -> Unit,
     onReloadCurrent: () -> Unit,
     onLoadPreloaded: (String) -> Unit,
+    onDeletePreloaded: (String) -> Unit,
     onSaveCurrentAsPreset: (String) -> Unit,
     onPlayers: () -> Unit,
     onHistory: () -> Unit,
@@ -102,6 +110,7 @@ private fun HomeScreen(
     var showPreloadedDialog by remember { mutableStateOf(false) }
     var showReloadConfirmation by remember { mutableStateOf(false) }
     var showSavePresetDialog by remember { mutableStateOf(false) }
+    var deleteCandidate by remember { mutableStateOf<PreloadedOrderOption?>(null) }
     var presetName by remember { mutableStateOf("") }
 
     Scaffold(
@@ -183,15 +192,34 @@ private fun HomeScreen(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (uiState.preloadedOptions.isEmpty()) {
+                        Text("No presets saved.")
+                    }
                     uiState.preloadedOptions.forEach { option ->
-                        OutlinedButton(
-                            onClick = {
-                                onLoadPreloaded(option.id)
-                                showPreloadedDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(option.label)
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = {
+                                    onLoadPreloaded(option.id)
+                                    showPreloadedDialog = false
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(option.label)
+                            }
+                            if (option.isDeletable) {
+                                IconButton(
+                                    onClick = { deleteCandidate = option },
+                                    enabled = !uiState.isDeletingPreset,
+                                    modifier = Modifier
+                                        .padding(start = 6.dp)
+                                        .width(44.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Delete,
+                                        contentDescription = "Delete ${option.label}",
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -199,6 +227,31 @@ private fun HomeScreen(
             confirmButton = {
                 TextButton(onClick = { showPreloadedDialog = false }) {
                     Text("Close")
+                }
+            },
+        )
+    }
+
+    deleteCandidate?.let { option ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text("Delete Preset") },
+            text = {
+                Text("Delete preset \"${option.label}\"? This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeletePreloaded(option.id)
+                        deleteCandidate = null
+                    },
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) {
+                    Text("Cancel")
                 }
             },
         )
