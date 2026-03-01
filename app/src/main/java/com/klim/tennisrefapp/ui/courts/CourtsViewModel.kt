@@ -45,6 +45,7 @@ class CourtsViewModel @Inject constructor(
             CourtListItemUi(court = court, activeTimerState = timerState)
         }.sortedWith(
             compareBy<CourtListItemUi>(
+                { completedSortRank(it.court.status) },
                 { timerSortRank(it.activeTimerState) },
                 { followedBySortRank(it.court) },
                 { statusSortRank(it.court.status) },
@@ -106,5 +107,9 @@ class CourtsViewModel @Inject constructor(
         val isFollowedBy = court.status == CourtStatus.SCHEDULED &&
             court.scheduleLabel?.contains("Followed By", ignoreCase = true) == true
         return if (isFollowedBy) 0 else 1
+    }
+
+    private fun completedSortRank(status: CourtStatus): Int {
+        return if (status == CourtStatus.COMPLETED) 1 else 0
     }
 }
