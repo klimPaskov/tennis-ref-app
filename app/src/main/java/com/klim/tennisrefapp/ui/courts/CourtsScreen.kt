@@ -267,7 +267,7 @@ private fun statusColor(status: CourtStatus, hasAlertHighlight: Boolean): androi
         CourtStatus.EMPTY -> MaterialTheme.colorScheme.outline
         CourtStatus.SCHEDULED -> MaterialTheme.colorScheme.primary
         CourtStatus.IN_PROGRESS -> Color(0xFFE0B422)
-        CourtStatus.COMPLETED -> MaterialTheme.colorScheme.secondary
+        CourtStatus.COMPLETED -> Color(0xFF2FA85A)
     }
 }
 

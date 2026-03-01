@@ -91,8 +91,8 @@ class CourtsViewModel @Inject constructor(
         return when (status) {
             CourtStatus.IN_PROGRESS -> 1
             CourtStatus.SCHEDULED -> 2
-            CourtStatus.COMPLETED -> 3
-            CourtStatus.EMPTY -> 4
+            CourtStatus.EMPTY -> 3
+            CourtStatus.COMPLETED -> 4
         }
     }
 

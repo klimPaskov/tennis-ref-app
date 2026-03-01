@@ -6,6 +6,7 @@ import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
@@ -875,6 +877,55 @@ private enum class PlayerSelectTarget {
 }
 
 @Composable
+private fun SwipeTimeBox(
+    label: String,
+    value: String,
+    onStep: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var dragAccumulator by remember { mutableStateOf(0f) }
+    val thresholdPx = 18f
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragAccumulator += dragAmount
+                        while (dragAccumulator <= -thresholdPx) {
+                            onStep(1)
+                            dragAccumulator += thresholdPx
+                        }
+                        while (dragAccumulator >= thresholdPx) {
+                            onStep(-1)
+                            dragAccumulator -= thresholdPx
+                        }
+                    },
+                    onDragEnd = { dragAccumulator = 0f },
+                    onDragCancel = { dragAccumulator = 0f },
+                )
+            }
+            .padding(vertical = 10.dp, horizontal = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
 private fun EditScheduledMatchDialog(
     detail: CourtDetail,
     availablePlayers: List<PlayerSummary>,
@@ -909,16 +960,19 @@ private fun EditScheduledMatchDialog(
     var selectedLeftPlayerId by remember(detail.matchId) { mutableStateOf(initialLeftId) }
     var selectedRightPlayerId by remember(detail.matchId) { mutableStateOf(initialRightId) }
     var timing by remember(detail.matchId) { mutableStateOf(initialTiming) }
-    var hourText by remember(detail.matchId) { mutableStateOf("%02d".format(initialHour)) }
-    var minuteValue by remember(detail.matchId) { mutableStateOf(initialMinute) }
+    val minuteOptions = remember { listOf(0, 15, 30, 45) }
+    var hourValue by remember(detail.matchId) { mutableStateOf(initialHour) }
+    var minuteIndex by remember(detail.matchId) {
+        mutableStateOf(minuteOptions.indexOf(initialMinute).takeIf { it >= 0 } ?: 0)
+    }
     var pickingTarget by remember { mutableStateOf<PlayerSelectTarget?>(null) }
     var playerSearch by remember { mutableStateOf("") }
 
     val playersById = remember(availablePlayers) { availablePlayers.associateBy { it.id } }
     val leftPlayer = selectedLeftPlayerId?.let(playersById::get)
     val rightPlayer = selectedRightPlayerId?.let(playersById::get)
-    val hourValue = hourText.toIntOrNull()
-    val timeValid = timing == ScheduledMatchTiming.FOLLOWED_BY || (hourValue != null && hourValue in 0..23)
+    val minuteValue = minuteOptions.getOrElse(minuteIndex) { 0 }
+    val timeValid = timing == ScheduledMatchTiming.FOLLOWED_BY || (hourValue in 0..23)
     val canSave = leftPlayer != null && rightPlayer != null && leftPlayer.id != rightPlayer.id && timeValid
     val filteredPlayers = availablePlayers.filter { player ->
         val query = playerSearch.trim()
@@ -965,29 +1019,31 @@ private fun EditScheduledMatchDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextField(
-                            value = hourText,
-                            onValueChange = { value ->
-                                hourText = value.filter { char -> char.isDigit() }.take(2)
+                        SwipeTimeBox(
+                            label = "HH",
+                            value = "%02d".format(hourValue),
+                            onStep = { step ->
+                                hourValue = (hourValue + step).coerceIn(0, 23)
                             },
-                            label = { Text("HH") },
-                            singleLine = true,
-                            isError = !timeValid,
                             modifier = Modifier.width(88.dp),
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Number,
-                                imeAction = ImeAction.Done,
-                            ),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf(0, 15, 30, 45).forEach { minute ->
-                                FilterChip(
-                                    selected = minuteValue == minute,
-                                    onClick = { minuteValue = minute },
-                                    label = { Text("%02d".format(minute)) },
-                                )
-                            }
-                        }
+                        SwipeTimeBox(
+                            label = "MM",
+                            value = "%02d".format(minuteValue),
+                            onStep = { step ->
+                                val count = minuteOptions.size
+                                if (count > 0) {
+                                    val raw = (minuteIndex + step) % count
+                                    minuteIndex = if (raw < 0) raw + count else raw
+                                }
+                            },
+                            modifier = Modifier.width(88.dp),
+                        )
+                        Text(
+                            text = "Swipe",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -998,8 +1054,7 @@ private fun EditScheduledMatchDialog(
                     val left = leftPlayer ?: return@Button
                     val right = rightPlayer ?: return@Button
                     val timeValue = if (timing == ScheduledMatchTiming.NOT_BEFORE) {
-                        val hour = hourValue ?: return@Button
-                        "%02d:%02d".format(hour, minuteValue)
+                        "%02d:%02d".format(hourValue.coerceIn(0, 23), minuteValue)
                     } else {
                         null
                     }
