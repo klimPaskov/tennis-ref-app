@@ -120,8 +120,8 @@ private fun DrawsScreen(
                         selected = selectedBoard?.eventCode == board.eventCode,
                         label = {
                             Text(
-                                if (board.eventCode == "BSQ") "Boys Qualification"
-                                else if (board.eventCode == "GSQ") "Girls Qualification"
+                                if (board.eventCode == "BSQ" || board.eventCode == "BS") "Boys Singles"
+                                else if (board.eventCode == "GSQ" || board.eventCode == "GS") "Girls Singles"
                                 else board.eventCode,
                             )
                         },

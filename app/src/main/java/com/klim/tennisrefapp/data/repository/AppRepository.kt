@@ -354,6 +354,7 @@ class AppRepository @Inject constructor(
         val loaded = when (preloadId.lowercase()) {
             "example" -> replaceTournamentWithImportedOrder(verifiedPreloadedOrderOfPlay())
             "28.02.2026" -> replaceTournamentWithImportedOrder(preloadedOrderOfPlay20260228())
+            "02.03.2026" -> replaceTournamentWithImportedOrder(preloadedOrderOfPlay20260302())
             else -> false
         }
         if (loaded) {
@@ -880,6 +881,81 @@ class AppRepository @Inject constructor(
         return ImportedOrderDocument(
             tournamentName = "28.02.2026",
             courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8", "Court 9"),
+            matches = matches,
+        )
+    }
+
+    private fun preloadedOrderOfPlay20260302(): ImportedOrderDocument {
+        fun entrant(name: String, country: String?, seed: Int? = null): ParsedEntrant {
+            return ParsedEntrant(name = name, countryCode = country, seed = seed)
+        }
+        fun schedule(order: Int): Pair<String, Long?> {
+            return when (order) {
+                1 -> "Starting at 09:00" to toTodayMillis("09:00")
+                3 -> "Not Before 11:00" to toTodayMillis("11:00")
+                else -> "Followed By" to null
+            }
+        }
+        fun match(
+            court: String,
+            order: Int,
+            eventCode: String,
+            left: ParsedEntrant,
+            right: ParsedEntrant,
+        ): ImportedOrderMatch {
+            val (scheduleLabel, manualNotBefore) = schedule(order)
+            return ImportedOrderMatch(
+                courtName = court,
+                order = order,
+                left = left,
+                right = right,
+                scheduleLabel = scheduleLabel,
+                manualNotBefore = manualNotBefore,
+                eventCode = eventCode,
+            )
+        }
+
+        val matches = listOf(
+            // 1. Starting at 09:00
+            match("Court 2", 1, "BS", entrant("Attila Montague", "USA", 8), entrant("Daniel Rutorov", "GBR")),
+            match("Court 3", 1, "BS", entrant("Dash Green", "GBR"), entrant("Mathias Merve", "FIN")),
+            match("Court 4", 1, "BS", entrant("Kaius Ketola", "FIN"), entrant("Egert Trave", "EST")),
+            match("Court 5", 1, "BS", entrant("Robin Rait Rikberg", "EST"), entrant("Timotej Turoci", "SVK")),
+            match("Court 6", 1, "GS", entrant("Matilda Cabrera Burns", "GBR", 8), entrant("Eleanora Roos", "EST")),
+            match("Court 7", 1, "BS", entrant("Aarne Koskinen", "FIN"), entrant("Filip Cierny", "SVK")),
+            match("Court 8", 1, "BS", entrant("Richard Hiemann", "GER"), entrant("Lukas Smailys", "LTU", 7)),
+
+            // 2. Followed By
+            match("Court 2", 2, "GS", entrant("Sohvi Rantanen", "FIN"), entrant("Miia Mihailov", "EST", 5)),
+            match("Court 3", 2, "BS", entrant("Mick-Angel Anicina-Dzhygurda", "FRA"), entrant("Mingus Zack Hansen", "DEN", 3)),
+            match("Court 4", 2, "BS", entrant("Robin Lucas Sirk", "EST"), entrant("Akseli Finnila", "FIN")),
+            match("Court 5", 2, "GS", entrant("Siiri Metsaeranta", "FIN"), entrant("Sofia Traverso", "EST")),
+            match("Court 6", 2, "GS", entrant("Alisa Lokk", "EST"), entrant("Karina Jonicenoka", "LAT")),
+            match("Court 7", 2, "BS", entrant("Hugo Vahur", "EST"), entrant("Aleksi Hast", "FIN")),
+            match("Court 8", 2, "BS", entrant("Vaclav Barina", "CZE"), entrant("Andreas Kuum", "EST")),
+
+            // 3. Not Before 11:00
+            match("Court 2", 3, "GS", entrant("Smilte Milaseviciute", "LTU"), entrant("Anna Kazinjan", "EST")),
+            match("Court 3", 3, "GS", entrant("Katriin Reinvald", "EST"), entrant("Jiayi Wang", "CHN", 4)),
+            match("Court 4", 3, "GS", entrant("Nora Olivia Adamson", "EST", 1), entrant("Styliani Noutsou", "GRE")),
+            match("Court 5", 3, "GS", entrant("Ella Moeller Wilstrup", "DEN", 3), entrant("Meribel Tamsalu", "EST")),
+            match("Court 6", 3, "GS", entrant("Varvara Trifonova", "EST"), entrant("Gabriela Sulcova", "CZE", 6)),
+            match("Court 7", 3, "GS", entrant("Mia Elise Pink", "EST"), entrant("Marie Johanna Lapimaa", "EST", 2)),
+            match("Court 8", 3, "GS", entrant("Elin Kalmus", "EST"), entrant("Zosia Bielus", "POL")),
+
+            // 4. Followed By
+            match("Court 2", 4, "BS", entrant("Maksymilian Kwiatkowski", "POL", 4), entrant("Hugo Narmont", "EST")),
+            match("Court 3", 4, "GS", entrant("Matilda Wennerstrom", "FIN", 7), entrant("Elizabeth Averjanov", "EST")),
+            match("Court 4", 4, "BS", entrant("David Beckles", "USA", 1), entrant("Marius Luumann", "EST")),
+            match("Court 5", 4, "GS", entrant("Viktoria Sidorenkova", "EST"), entrant("Anna Kotchetkov", "AUT")),
+            match("Court 6", 4, "GS", entrant("Sonia Sirenius", "FIN"), entrant("Stefania Kononova", "EST")),
+            match("Court 7", 4, "GS", entrant("Margarita Novik", "EST"), entrant("Ksenija Kisseljova", "EST")),
+            match("Court 8", 4, "GS", entrant("Simona Sepp", "EST"), entrant("Nadia Stawowiak", "POL")),
+        )
+
+        return ImportedOrderDocument(
+            tournamentName = "02.03.2026",
+            courts = listOf("Court 2", "Court 3", "Court 4", "Court 5", "Court 6", "Court 7", "Court 8"),
             matches = matches,
         )
     }
@@ -2288,7 +2364,7 @@ class AppRepository @Inject constructor(
     private fun extractEventCodeFromRoundName(roundName: String?): String? {
         val value = roundName?.trim().orEmpty()
         if (value.isBlank()) return null
-        return Regex("\\b([A-Z]{3,4})\\s*$")
+        return Regex("\\b([A-Z]{2,4})\\s*$")
             .find(value)
             ?.groupValues
             ?.getOrNull(1)
