@@ -5,7 +5,6 @@ It helps a referee manage courts, start matches, track events, and review histor
 
 ## What You Can Do
 - Load an order of play from file.
-- Use preloaded presets (for quick setup).
 - Open any court and run the match flow.
 - Track warm-up and in-match timers.
 - Record violations, score updates, and final results.
@@ -35,14 +34,11 @@ It helps a referee manage courts, start matches, track events, and review histor
 1. On `Home`, choose `New Order Of Play` to import a file.
 2. Or choose `Load Preloaded Order Of Play`.
 3. You can save the current tournament as a preset with `Save Current As Preset`.
-4. Presets can be removed from the preset list (with confirmation).
 
 ## Supported Import Files
 - Images (`png`, `jpg`, `jpeg`, `webp`)
 - `PDF`
 - `text/plain`
-
-If parsing fails, the app keeps current data and shows an error message.
 
 ## Not-Before Time (Simple)
 Each match can have a planned start limit (`Not Before HH:mm`).  
@@ -51,11 +47,3 @@ The app uses that together with player-availability constraints and picks the ea
 ## Data Storage
 - Room database name: `tennis_ref.db`
 - Android path: `/data/data/com.klim.tennisrefapp/databases/tennis_ref.db`
-
-## Presets and Git
-- Local preset files can live in `app/src/main/assets/local_presets/`.
-- Saved presets are also stored on-device in app internal storage.
-- Local preset assets are ignored by Git, so they are not pushed to GitHub.
-
-## More Technical Docs
-- `docs/mechanics/`
